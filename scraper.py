@@ -41,6 +41,14 @@ def analyser_signal_faible(texte_pdf, source_nom):
     response = model.generate_content(prompt)
     return response.text
 
+def envoyer_alerte_discord(message):
+    webhook_url = os.environ.get("DISCORD_WEBHOOK")
+    if webhook_url:
+        data = {"content": f"🚀 **SIGNAL FAIBLE DÉTECTÉ** :\n{message}"}
+        try:
+            requests.post(webhook_url, json=data)
+        except Exception as e:
+            print(f"Erreur envoi Discord: {e}")
 def main():
     for site in SITES:
         print(f"--- Scan de {site['nom']} ---")
@@ -62,9 +70,11 @@ def main():
                         resultat = analyser_signal_faible(texte_brut, site['nom'])
                         if "NÉANT" not in resultat.upper():
                             print(f"⚠️ SIGNAL DÉTECTÉ : {resultat}")
+                            envoyer_alerte_discord(resultat) #
                             # Ici, vous pourrez ajouter la fonction d'envoi Discord/Email
         except Exception as e:
             print(f"Erreur sur le site {site['nom']}: {e}")
 
 if __name__ == "__main__":
     main()
+
