@@ -1,7 +1,8 @@
 import os
 import requests
+import csv
 from bs4 import BeautifulSoup
-import fitz  # PyMuPDF
+import fitz
 import google.generativeai as genai
 from urllib.parse import urljoin
 
@@ -12,135 +13,103 @@ BREVO_KEY = os.environ.get("BREVO_API_KEY")
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 2. Cible : EPA Paris-Saclay
-SITES = [
-    {
-        "nom": "EPA Paris-Saclay", 
-        "url": "https://epa-paris-saclay.fr/espace-presse/les-communiques-de-presse/"
-    },
-]
-
 def extraire_texte_pdf(pdf_url):
     try:
         response = requests.get(pdf_url, timeout=15)
         with fitz.open(stream=response.content, filetype="pdf") as doc:
-            # On analyse les 3 premières pages (souvent suffisant pour un CP)
             texte = "".join([page.get_text() for page in doc[:3]])
             return texte
-    except Exception as e:
-        print(f"Erreur PDF {pdf_url}: {e}")
+    except:
         return None
 
-def analyser_signal_faible(texte_pdf, source_nom):
+def analyser_ia(texte, source, type_url):
     prompt = f"""
-    Tu es un expert en développement immobilier et foncier. 
-    Analyse ce communiqué de presse de {source_nom}.
-    RECHERCHE EXCLUSIVEMENT : 
-    - Lancement de consultations de promoteurs ou d'opérateurs.
-    - Désignation de lauréats (architectes, promoteurs, investisseurs).
-    - Annonces de nouveaux programmes de logements, bureaux ou équipements.
-    - Cessions de charges foncières ou signatures de promesses de vente.
-
-    SI TU TROUVES : Fais un résumé très court (3 phrases max) avec : 
-    1. Le lieu précis du projet.
-    2. La nature de l'opportunité (ex: Concours lancé, Lauréat désigné).
-    3. Les surfaces ou nombres de logements si mentionnés.
-
-    SI TU NE TROUVES RIEN DE PERTINENT : Réponds exactement par le mot 'NÉANT'.
+    Tu es un expert en développement immobilier. Analyse ce document provenant de {source} (section {type_url}).
+    RECHERCHE : Lancement de concours, désignation de lauréat, avis de préemption, ou vente foncière.
     
-    TEXTE DU DOCUMENT :
-    {texte_pdf[:8000]}
+    SI TU TROUVES : Fais un résumé de 3 lignes max avec le lieu, le projet et l'échéance.
+    SI RIEN : Réponds 'NÉANT'.
+    
+    TEXTE : {texte[:7000]}
     """
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        res = model.generate_content(prompt)
+        return res.text
     except:
         return "NÉANT"
 
-def envoyer_email(rapport_final):
+def envoyer_mail(corps_html):
     url = "https://api.brevo.com/v3/smtp/email"
     payload = {
         "sender": {"name": "Agent Veille Urban Agency", "email": "bertrand@urban-agency.com"},
         "to": [{"email": "bertrand@urban-agency.com"}],
-        "subject": "🎯 Veille Immo : Nouvelles Opportunités Paris-Saclay",
-        "htmlContent": f"""
-        <html>
-            <body style="font-family: Arial, sans-serif; color: #333;">
-                <div style="background-color: #f4f7f6; padding: 20px; border-radius: 10px;">
-                    <h2 style="color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px;">
-                        Rapport de détection IA
-                    </h2>
-                    <div style="margin-top: 20px;">
-                        {rapport_final}
-                    </div>
-                    <p style="font-size: 11px; color: #7f8c8d; margin-top: 30px;">
-                        Analyse automatisée générée par Gemini 1.5 Flash.
-                    </p>
-                </div>
-            </body>
-        </html>
-        """
+        "subject": "🎯 Rapport de Veille Multi-Sources (EPA/EPF/Collectivités)",
+        "htmlContent": f"<html><body style='font-family:Arial;'>{corps_html}</body></html>"
     }
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "api-key": BREVO_KEY
-    }
+    headers = {"accept": "application/json", "content-type": "application/json", "api-key": BREVO_KEY}
     requests.post(url, json=payload, headers=headers)
 
 def main():
-    print("--- Début de la veille stratégique ---")
-    compte_rendu_final = ""
-    projets_trouves = 0
+    rapport_final = ""
+    trouve_global = False
+    
+    if not os.path.exists('cibles.csv'):
+        print("❌ Erreur : 'cibles.csv' est introuvable sur GitHub.")
+        return
 
-    for site in SITES:
-        print(f"Scan de : {site['nom']}...")
-        try:
-            res = requests.get(site['url'], headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
-            soup = BeautifulSoup(res.text, 'html.parser')
+    # Ouverture du CSV (Adapté à votre fichier avec virgule)
+    with open('cibles.csv', mode='r', encoding='utf-8') as f:
+        lecteur = csv.DictReader(f)
+        
+        for ligne in lecteur:
+            nom_organisme = ligne.get("Nom de l'Organisme")
+            # On liste toutes les colonnes d'URL à scanner
+            colonnes_url = {
+                "Actualités": ligne.get("URL Actualités / Projets"),
+                "Presse": ligne.get("URL Communiqués de Presse"),
+                "Délibérations": ligne.get("URL Délibérations / Actes (RAA)")
+            }
+
+            print(f"--- Scan de {nom_organisme} ---")
             
-            # On cherche les liens vers les pages de communiqués individuels
-            links = soup.select('a.post-link') or soup.find_all('a', href=True)
-            
-            for link in links:
-                href = link.get('href', '')
-                if '/les-communiques-de-presse/' in href and href != site['url']:
-                    full_url = urljoin(site['url'], href)
+            for type_url, url_cible in colonnes_url.items():
+                if not url_cible or "http" not in url_cible:
+                    continue
+
+                try:
+                    print(f"  Vérification section {type_url}...")
+                    res = requests.get(url_cible, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+                    soup = BeautifulSoup(res.text, 'html.parser')
                     
-                    # On entre dans la page pour trouver le PDF
-                    try:
-                        sub_res = requests.get(full_url, timeout=10)
-                        sub_soup = BeautifulSoup(sub_res.text, 'html.parser')
-                        pdf_link = sub_soup.find('a', href=lambda x: x and x.endswith('.pdf'))
-                        
-                        if pdf_link:
-                            pdf_url = urljoin(full_url, pdf_link['href'])
-                            print(f"🔍 Analyse IA du document : {pdf_url}")
-                            
+                    # On cherche les PDF sur la page
+                    pdf_scannes = 0
+                    for link in soup.find_all('a', href=True):
+                        href = link['href']
+                        if '.pdf' in href.lower():
+                            pdf_url = urljoin(url_cible, href)
                             texte = extraire_texte_pdf(pdf_url)
+                            
                             if texte:
-                                analyse = analyser_signal_faible(texte, site['nom'])
+                                analyse = analyser_ia(texte, nom_organisme, type_url)
                                 if "NÉANT" not in analyse.upper():
-                                    projets_trouves += 1
-                                    compte_rendu_final += f"""
-                                    <div style="margin-bottom: 25px; padding: 15px; background: white; border-radius: 5px;">
-                                        <strong style="color: #e67e22;">📍 OPPORTUNITÉ DÉTECTÉE</strong><br>
+                                    trouve_global = True
+                                    rapport_final += f"""
+                                    <div style='border-left:4px solid #e67e22; padding:10px; margin-bottom:15px; background:#fdf2e9;'>
+                                        <b style='color:#d35400;'>📍 {nom_organisme}</b> ({type_url})<br>
                                         {analyse}<br>
-                                        <a href="{pdf_url}" style="color: #3498db; text-decoration: none; font-size: 13px;">Lien vers le communiqué source →</a>
+                                        <a href='{pdf_url}' style='font-size:12px;'>Ouvrir le document source</a>
                                     </div>
                                     """
-                                    if projets_trouves >= 3: break # On limite à 3 pour éviter les mails trop longs
-                    except:
-                        continue
-                        
-        except Exception as e:
-            print(f"Erreur sur le site {site['nom']}: {e}")
+                                    pdf_scannes += 1
+                                    if pdf_scannes >= 2: break # Max 2 docs par section pour ne pas saturer l'e-mail
+                except Exception as e:
+                    print(f"  Erreur sur {url_cible}: {e}")
 
-    if projets_trouves > 0:
-        envoyer_email(compte_rendu_final)
-        print(f"✅ Terminé : {projets_trouves} opportunités envoyées.")
+    if trouve_global:
+        envoyer_mail(rapport_final)
+        print("✅ Rapport complet envoyé !")
     else:
-        print("ℹ️ Aucun nouveau signal détecté aujourd'hui.")
+        print("Mise à jour : aucun nouveau signal sur les 28 organismes.")
 
 if __name__ == "__main__":
     main()
