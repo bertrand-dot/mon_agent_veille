@@ -2,26 +2,40 @@ name: Routine de Veille Foncière
 
 on:
   schedule:
-    - cron: '0 8 * * 1-5' # S'exécute à 8h du matin, du lundi au vendredi
-  workflow_dispatch:      # Permet de lancer le test manuellement
+    - cron: '0 8 * * 1-5' # Lundi au Vendredi à 8h00
+  workflow_dispatch:      # Permet le lancement manuel
+
+# ⚠️ TRÈS IMPORTANT : Donne le droit au bot d'écrire dans le dépôt
+permissions:
+  contents: write
 
 jobs:
   run-scraper:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Récupérer le code
+      - name: 1. Récupérer le code
         uses: actions/checkout@v3
 
-      - name: Installer Python
+      - name: 2. Installer Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      - name: Installer les dépendances
+      - name: 3. Installer les dépendances
         run: pip install -r requirements.txt
 
-      - name: Lancer la recherche
+      - name: 4. Lancer l'Agent IA (Scraper)
         run: python scraper.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+
+      # C'EST ICI QUE LA MÉMOIRE EST SAUVEGARDÉE 👇
+      - name: 5. Sauvegarder l'historique
+        run: |
+          git config --global user.name "Agent Veille IA"
+          git config --global user.email "bot@urban-agency.com"
+          git add download_history.json
+          git commit -m "Mise à jour mémoire historique [skip ci]" || echo "Rien à sauvegarder"
+          git push
