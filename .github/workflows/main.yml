@@ -23,4 +23,5 @@ jobs:
       - name: Lancer la recherche
         run: python scraper.py
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} # Votre clé sécurisée
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
