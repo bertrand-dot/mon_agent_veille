@@ -151,14 +151,16 @@ def generer_bloc_html(item, is_new):
 
 def envoyer_mail(nouveaux, anciens):
     url = "https://api.brevo.com/v3/smtp/email"
+    date_jour = datetime.now().strftime('%d/%m/%Y')
     
-    # SUJET DYNAMIQUE
+    # --- MODIFICATION DU TITRE ICI ---
+    sujet = f"UA_Veille Opportunités_{date_jour}"
+    
+    # Texte d'intro dynamique selon le contenu
     if len(nouveaux) > 0:
-        sujet = f"⚡ Veille Immo : {len(nouveaux)} Opportunités (< 3 mois)"
-        intro_text = "Voici les nouvelles détections du jour."
+        intro_text = f"Voici les {len(nouveaux)} nouvelles détections du jour."
     else:
-        sujet = "✅ Rapport Quotidien : R.A.S"
-        intro_text = "Aucune nouvelle opportunité détectée ce matin. Voici pour rappel votre portefeuille en cours :"
+        intro_text = "R.A.S : Aucune nouvelle opportunité détectée ce matin. Voici l'historique de votre portefeuille :"
 
     html_new = "".join([generer_bloc_html(x, True) for x in nouveaux])
     html_old = "".join([generer_bloc_html(x, False) for x in anciens])
@@ -172,7 +174,7 @@ def envoyer_mail(nouveaux, anciens):
             <div style="max-width:600px; margin:auto; background:white; border-radius:8px; overflow:hidden;">
                 <div style="background:#2c3e50; padding:20px; text-align:center; color:white;">
                     <h2 style="margin:0;">Urban Agency Dashboard</h2>
-                    <p style="font-size:12px; color:#bdc3c7;">{datetime.now().strftime('%d/%m/%Y')}</p>
+                    <p style="font-size:12px; color:#bdc3c7;">{date_jour}</p>
                 </div>
                 <div style="padding:20px;">
                     <p style="color:#555; font-style:italic; border-bottom:1px solid #eee; padding-bottom:15px;">
@@ -255,7 +257,7 @@ def main():
     
     # ENVOI SYSTÉMATIQUE (Même si vide)
     envoyer_mail(leads_nouveaux, leads_anciens)
-    print("✅ Rapport envoyé (Positif ou Négatif).")
+    print("✅ Rapport envoyé.")
 
 if __name__ == "__main__":
     main()
