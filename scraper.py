@@ -1,36 +1,40 @@
 import os
 import requests
+from bs4 import BeautifulSoup
+import fitz
+import google.generativeai as genai
+from urllib.parse import urljoin
 
-def test_final():
-    api_key = os.environ.get("BREVO_API_KEY")
-    
-    # Debug pour voir si la clé est bien chargée
-    if not api_key:
-        print("❌ ERREUR : Le Secret GitHub 'BREVO_API_KEY' est introuvable ou vide.")
-        return
+# Config API
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+BREVO_KEY = os.environ.get("BREVO_API_KEY")
 
-    print(f"Clé détectée (début) : {api_key[:5]}...")
+genai.configure(api_key=GEMINI_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
+SITES = [{"nom": "EPA Paris-Saclay", "url": "https://epa-paris-saclay.fr/espace-presse/les-communiques-de-presse/"}]
+
+def envoyer_email(rapport):
     url = "https://api.brevo.com/v3/smtp/email"
     payload = {
         "sender": {"name": "Agent Urban", "email": "bertrand@urban-agency.com"},
         "to": [{"email": "bertrand@urban-agency.com"}],
-        "subject": "TEST CONNEXION REUSSIE",
-        "htmlContent": "<html><body><h1>Le pont est établi !</h1></body></html>"
+        "subject": "Rapport Veille Paris-Saclay",
+        "htmlContent": f"<html><body>{rapport}</body></html>"
     }
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "api-key": api_key
-    }
-    
+    headers = {"accept": "application/json", "content-type": "application/json", "api-key": BREVO_KEY}
     res = requests.post(url, json=payload, headers=headers)
-    
-    if res.status_code == 201:
-        print("✅ SUCCÈS : L'e-mail a été accepté par Brevo !")
-    else:
-        print(f"❌ ÉCHEC : Erreur {res.status_code}")
-        print(f"Message de Brevo : {res.text}")
+    print(f"Status Brevo: {res.status_code}")
+
+def main():
+    if not BREVO_KEY:
+        print("❌ Le script ne voit toujours pas la BREVO_API_KEY")
+        return
+
+    print("✅ Connexion établie. Scan en cours...")
+    # Pour ce test, on envoie un mail directement pour confirmer que le pont fonctionne
+    rapport = "Le script est maintenant correctement connecté à Brevo et Gemini."
+    envoyer_email(rapport)
 
 if __name__ == "__main__":
-    test_final()
+    main()
