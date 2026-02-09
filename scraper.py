@@ -54,45 +54,45 @@ def main():
     rapport_global = ""
     projets_trouves = 0
 
-    # SOLUTION : On essaie UTF-8, et si ça échoue, on utilise Latin-1 (format Excel classique)
+    # On charge le fichier en gérant l'encodage Windows-1252 (Excel) ou UTF-8
     try:
-        f = open('cibles.csv', mode='r', encoding='utf-8')
-        content = f.read(1024)
-        f.seek(0)
+        with open('cibles.csv', mode='r', encoding='utf-8') as f:
+            lignes = f.readlines()
     except UnicodeDecodeError:
-        f = open('cibles.csv', mode='r', encoding='latin-1')
-        content = f.read(1024)
-        f.seek(0)
+        with open('cibles.csv', mode='r', encoding='latin-1') as f:
+            lignes = f.readlines()
 
-    # Détection du séparateur (virgule ou point-virgule)
-    dialect = csv.Sniffer().sniff(content)
-    lecteur = csv.DictReader(f, dialect=dialect)
+    # Détection manuelle simplifiée du séparateur
+    header = lignes[0]
+    separateur = ';' if ';' in header else ','
+    
+    lecteur = csv.DictReader(lignes, delimiter=separateur)
     
     for ligne in lecteur:
-        # On utilise .get() pour éviter les erreurs si une colonne manque
-        nom = ligne.get("Nom de l'Organisme")
-        urls = {
-            "Actualités": ligne.get("URL Actualités / Projets"),
-            "Presse": ligne.get("URL Communiqués de Presse"),
-            "Délibérations": ligne.get("URL Délibérations / Actes (RAA)")
-        }
+        # Nettoyage des noms de colonnes (enlève les espaces invisibles)
+        nom = ligne.get("Nom de l'Organisme") or ligne.get("Nom de l'organisme")
+        url_actu = ligne.get("URL Actualités / Projets")
+        url_presse = ligne.get("URL Communiqués de Presse")
+        url_raa = ligne.get("URL Délibérations / Actes (RAA)")
 
         if not nom: continue
         print(f"--- Scan de : {nom} ---")
         
+        urls = {"Actualités": url_actu, "Presse": url_presse, "Délibérations": url_raa}
+        
         for cat, url_cible in urls.items():
-            if not url_cible or "http" not in url_cible:
+            if not url_cible or "http" not in str(url_cible):
                 continue
             
             try:
-                res = requests.get(url_cible, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+                res = requests.get(url_cible.strip(), headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
                 soup = BeautifulSoup(res.text, 'html.parser')
                 
                 count_pdf = 0
                 for link in soup.find_all('a', href=True):
                     href = link['href']
                     if '.pdf' in href.lower():
-                        pdf_url = urljoin(url_cible, href)
+                        pdf_url = urljoin(url_cible.strip(), href)
                         texte = extraire_texte_pdf(pdf_url)
                         if texte:
                             analyse = analyser_ia(texte, nom, cat)
@@ -103,8 +103,6 @@ def main():
                                 if count_pdf >= 1: break 
             except Exception as e:
                 print(f"Erreur sur {url_cible}: {e}")
-    
-    f.close()
 
     if projets_trouves > 0:
         envoyer_mail(rapport_global)
