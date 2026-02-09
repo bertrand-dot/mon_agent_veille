@@ -1,16 +1,22 @@
 import os
 import requests
 
-def test_envoi():
+def test_final():
     api_key = os.environ.get("BREVO_API_KEY")
-    print(f"Clé API détectée (longueur) : {len(api_key) if api_key else '0 (VIDE !)'}")
     
+    # Debug pour voir si la clé est bien chargée
+    if not api_key:
+        print("❌ ERREUR : Le Secret GitHub 'BREVO_API_KEY' est introuvable ou vide.")
+        return
+
+    print(f"Clé détectée (début) : {api_key[:5]}...")
+
     url = "https://api.brevo.com/v3/smtp/email"
     payload = {
-        "sender": {"name": "Test IA", "email": "bertrand@urban-agency.com"},
+        "sender": {"name": "Agent Urban", "email": "bertrand@urban-agency.com"},
         "to": [{"email": "bertrand@urban-agency.com"}],
-        "subject": "TEST TECHNIQUE BREVO",
-        "htmlContent": "<html><body><h1>Le pont fonctionne !</h1></body></html>"
+        "subject": "TEST CONNEXION REUSSIE",
+        "htmlContent": "<html><body><h1>Le pont est établi !</h1></body></html>"
     }
     headers = {
         "accept": "application/json",
@@ -19,8 +25,12 @@ def test_envoi():
     }
     
     res = requests.post(url, json=payload, headers=headers)
-    print(f"Code retour Brevo : {res.status_code}")
-    print(f"Réponse Brevo : {res.text}")
+    
+    if res.status_code == 201:
+        print("✅ SUCCÈS : L'e-mail a été accepté par Brevo !")
+    else:
+        print(f"❌ ÉCHEC : Erreur {res.status_code}")
+        print(f"Message de Brevo : {res.text}")
 
 if __name__ == "__main__":
-    test_envoi()
+    test_final()
