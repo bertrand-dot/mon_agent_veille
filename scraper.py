@@ -21,7 +21,7 @@ client = None
 if GEMINI_KEY:
     try:
         client = genai.Client(api_key=GEMINI_KEY)
-        logging.info("✅ IA Gemini 1.5 Flash activée.")
+        logging.info("✅ IA Gemini activée (Mode Haute Capacité).")
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
 
@@ -45,16 +45,15 @@ def chercher_serpapi(cible):
         return res.get("organic_results", [])
     except: return []
 
-# --- 3. ANALYSE IA ---
+# --- 3. ANALYSE IA (NOM DE MODÈLE STABILISÉ) ---
 
 def analyser_ia(item, contenu_web):
     if not client: return {"score": 0}
-    time.sleep(1.5) # Sécurité quota
+    time.sleep(1.5) # Anti-429
     
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
     prompt = f"""RÔLE : Directeur du Développement Urban Agency.
     MISSION : Extraire les données CRITIQUES et identifier les ACTEURS clés.
-    
     FORMAT JSON STRICT :
     {{
       "projet": "Nom du site",
@@ -69,10 +68,16 @@ def analyser_ia(item, contenu_web):
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-        data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
+        # On utilise 'gemini-1.5-flash' qui est le standard le plus stable pour éviter la 404
+        response = client.models.generate_content(
+            model="gemini-1.5-flash", 
+            contents=prompt
+        )
+        text_json = response.text.replace('```json', '').replace('```', '').strip()
+        data = json.loads(text_json)
         return data
-    except:
+    except Exception as e:
+        logging.warning(f"⚠️ Erreur IA : {e}")
         return {"score": 0}
 
 # --- 4. DESIGN DU RAPPORT ---
@@ -96,10 +101,10 @@ def envoyer_mail(resultats):
             </div>
             <div style="padding: 12px 20px; background: #f8f9fa; border-bottom: 1px solid #eee; font-family: {font_body}; font-size: 11px; color: #666;">
                 <table width="100%"><tr>
-                    <td width="25%">📝 <b>PROCÉDURE:</b> {o.get('procedure')}</td>
-                    <td width="25%">📅 <b>DEADLINE:</b> {o.get('deadline')}</td>
-                    <td width="25%">💰 <b>BUDGET:</b> {o.get('budget')}</td>
-                    <td width="25%">🤝 <b>PARTENAIRES:</b> {o.get('partenaires')}</td>
+                    <td width="25%">📝 <b>PROCÉDURE:</b> {o.get('procedure', 'N/A')}</td>
+                    <td width="25%">📅 <b>DEADLINE:</b> {o.get('deadline', 'N/A')}</td>
+                    <td width="25%">💰 <b>BUDGET:</b> {o.get('budget', 'N/A')}</td>
+                    <td width="25%">🤝 <b>PARTENAIRES:</b> {o.get('partenaires', 'N/A')}</td>
                 </tr></table>
             </div>
             <div style="padding: 20px; font-family: {font_body};">
@@ -115,7 +120,7 @@ def envoyer_mail(resultats):
             <img src="{LOGO_URL}" height="60">
         </div>
         <div style="max-width: 800px; margin: 40px auto; padding: 0 20px;">
-            <h1 style="font-family: {font_header}; text-align: center; text-transform: uppercase;">Radar UA - Focus Bordeaux</h1>
+            <h1 style="font-family: {font_header}; text-align: center; text-transform: uppercase;">Radar UA - Bordeaux</h1>
             {blocs}
         </div></body></html>"""
 
@@ -128,7 +133,7 @@ def envoyer_mail(resultats):
 # --- 5. EXECUTION ---
 
 def main():
-    logging.info("🚀 Scan ciblé Bordeaux en cours...")
+    logging.info("🚀 Scan final Bordeaux en cours...")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
@@ -136,8 +141,6 @@ def main():
         except: hist = {}
         
     resultats = []
-    
-    # LISTE STRICTE DES 5 CIBLES DEMANDÉES
     cibles = [
         "Bordeaux Métropole",
         "Mairie de Bordeaux",
@@ -152,13 +155,10 @@ def main():
         for i in items:
             url = i.get('link')
             if not url or url in hist: continue
-            
             texte = extraire_texte_page(url)
             analyse = analyser_ia(i, texte)
-            
             if isinstance(analyse, dict) and analyse.get('score', 0) >= 1:
                 resultats.append({"url": url, **analyse})
-            
             hist[url] = {"date": datetime.now().strftime('%Y-%m-%d')}
 
     envoyer_mail(resultats)
