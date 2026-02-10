@@ -17,11 +17,13 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# --- IA CONFIGURATION (MISE À JOUR VERS 1.5 FLASH) ---
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        model = genai.GenerativeModel("gemini-pro")
-        logging.info("✅ IA Gemini activée.")
+        # On utilise gemini-1.5-flash pour éviter l'erreur 404
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        logging.info("✅ IA Gemini 1.5 Flash activée.")
     except Exception as e:
         logging.error(f"❌ Erreur Gemini: {e}")
 
@@ -33,12 +35,13 @@ def extraire_texte_page(url):
         res = requests.get(url, timeout=12, headers=headers)
         if res.status_code != 200: return ""
         soup = BeautifulSoup(res.text, 'html.parser')
+        # On nettoie la page des éléments inutiles
         for s in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']): s.decompose()
-        return soup.get_text(separator=' ')[:5000]
+        text = soup.get_text(separator=' ')
+        return " ".join(text.split())[:6000] # Limite augmentée à 6000 pour 1.5 Flash
     except: return ""
 
 def chercher_serpapi(cible):
-    # Requête orientée 'Régénération et Friches'
     query = f'"{cible}" (Bordeaux OR Métropole) (friche OR "régénération urbaine" OR délibération OR "portage foncier" OR ZAC OR "avis de marché")'
     params = {"engine": "google", "q": query, "api_key": SERPAPI_KEY, "num": 30, "gl": "fr", "hl": "fr", "tbs": "qdr:m6"}
     try:
@@ -49,10 +52,10 @@ def chercher_serpapi(cible):
 # --- 3. ANALYSE AVEC SECURITE ANTI-ERREUR ---
 
 def analyser_ia(item, contenu_web):
-    """Analyse stratégique avec protection contre les clés manquantes (KeyError)"""
+    """Analyse stratégique avec protection contre les clés manquantes"""
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
     
-    prompt = f"""RÔLE : Directeur du Développement Urban Agency.
+    prompt = f"""RÔLE : Directeur du Développement Urban Agency (Architecture).
     MISSION : Analyser le potentiel de régénération urbaine à Bordeaux.
     
     FORMAT JSON STRICT :
@@ -60,7 +63,7 @@ def analyser_ia(item, contenu_web):
       "projet": "Nom du site ou projet",
       "score": 0,
       "analyse": "Ton raisonnement stratégique sur l'opportunité",
-      "action": "Action concrète recommandée pour l'agence"
+      "action": "Action concrète recommandée"
     }}
     
     DONNÉES : {item.get('title')} | {contexte}"""
@@ -70,15 +73,14 @@ def analyser_ia(item, contenu_web):
         text_json = res.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
         
-        # SECURITÉ : On utilise .get() pour éviter le KeyError si l'IA change les noms
         return {
             "projet": data.get("projet", item.get("title", "Projet inconnu")),
             "score": int(data.get("score", 0)),
-            "analyse": data.get("analyse") or data.get("analyse_strategique") or "Analyse disponible en consultant la source.",
-            "action": data.get("action") or data.get("action_recommandee") or "Surveiller l'évolution du dossier."
+            "analyse": data.get("analyse") or "Analyse disponible en consultant la source.",
+            "action": data.get("action") or "Surveiller l'évolution du dossier."
         }
     except Exception as e:
-        logging.warning(f"⚠️ Erreur analyse IA sur un lien : {e}")
+        logging.warning(f"⚠️ Erreur analyse IA : {e}")
         return {"score": 0}
 
 # --- 4. ENVOI DU RAPPORT ---
@@ -87,23 +89,23 @@ def envoyer_mail(resultats):
     if not resultats: return
     
     date_str = datetime.now().strftime('%d/%m/%Y')
-    subject = f"🎯 Radar UA Bordeaux : {len(resultats)} Signaux Détectés"
+    subject = f"🎯 Radar UA Bordeaux : {len(resultats)} Opportunités"
     
     blocs = ""
     for o in sorted(resultats, key=lambda x: x['score'], reverse=True):
         color = "#e74c3c" if o['score'] >= 2 else "#3498db"
         blocs += f"""
-        <div style="border-left:5px solid {color}; padding:15px; margin-bottom:15px; background:#fff; border-radius:4px;">
+        <div style="border-left:5px solid {color}; padding:15px; margin-bottom:15px; background:#fff; border-radius:4px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">
             <b style="font-size:17px; color:#2c3e50;">{o['projet']}</b> <span style="font-size:12px;">(Score {o['score']}/3)</span><br>
-            <p style="margin:10px 0; font-size:14px; color:#333;"><b>Opportunité :</b> {o['analyse']}</p>
-            <p style="margin:5px 0; font-size:14px; color:#27ae60;"><b>Action UA :</b> {o['action']}</p>
-            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">VOIR LA SOURCE →</a>
+            <p style="margin:10px 0; font-size:14px; color:#333;"><b>Analyse :</b> {o['analyse']}</p>
+            <p style="margin:5px 0; font-size:14px; color:#27ae60;"><b>Action :</b> {o['action']}</p>
+            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">CONSULTER LA SOURCE →</a>
         </div>"""
 
-    full_html = f"""<html><body style="font-family:Arial, sans-serif; background:#f4f4f4; padding:20px;">
+    full_html = f"""<html><body style="font-family:Arial; background:#f4f4f4; padding:20px;">
         <div style="max-width:650px; margin:auto;">
             <img src="{LOGO_URL}" height="45" style="margin-bottom:20px;">
-            <h2 style="color:#2c3e50; border-bottom:2px solid #ddd; padding-bottom:10px;">Intelligence Territoriale Bordeaux</h2>
+            <h2 style="color:#2c3e50; border-bottom:2px solid #ddd; padding-bottom:10px;">Radar Stratégique Bordeaux</h2>
             {blocs}
         </div>
     </body></html>"""
@@ -117,7 +119,7 @@ def envoyer_mail(resultats):
 # --- 5. MAIN ---
 
 def main():
-    logging.info("🚀 Scan stratégique correctif en cours...")
+    logging.info("🚀 Scan correctif 1.5 Flash en cours...")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
@@ -128,7 +130,7 @@ def main():
     cibles = ["Bordeaux Métropole", "EPA Bordeaux Euratlantique", "EPF Nouvelle-Aquitaine", "La Fabrique de Bordeaux Métropole"]
     
     for cible in cibles:
-        logging.info(f"🔎 Investigation profonde : {cible}")
+        logging.info(f"🔎 Investigation : {cible}")
         items = chercher_serpapi(cible)
         for i in items:
             url = i.get('link')
@@ -139,12 +141,11 @@ def main():
             
             if analyse.get('score', 0) >= 1:
                 resultats.append({"url": url, **analyse})
-                logging.info(f"   🔥 Signal capturé : {analyse['projet']}")
             
             hist[url] = {"date": datetime.now().strftime('%Y-%m-%d'), "score": analyse.get('score', 0)}
 
     envoyer_mail(resultats)
     with open(HISTORY_FILE, 'w') as f: json.dump(hist, f, indent=2)
-    logging.info("🏁 Terminé.")
+    logging.info("🏁 Mission terminée.")
 
 if __name__ == "__main__": main()
