@@ -78,7 +78,7 @@ def analyser_ia_strategique(texte, source):
     try:
         time.sleep(1)  # Rate limiting Gemini
         response = client.models.generate_content(
-            model='gemini-2.0-flash-exp',
+            model='gemini-1.5-flash',
             contents=prompt
         )
         clean_text = response.text.replace('```json', '').replace('```', '').strip()
