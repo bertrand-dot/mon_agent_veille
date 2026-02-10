@@ -17,23 +17,36 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# --- IA CONFIGURATION (FIX STABLE) ---
+# --- IA CONFIGURATION (ROBUSTE) ---
 model = None
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
         
-        # Liste les modèles disponibles pour vérifier le nom exact
-        available_models = [m["name"] for m in genai.list_models()]
+        # Récupère tous les modèles disponibles
+        models_info = genai.list_models()
+        available_models = [m["name"] for m in models_info]
         logging.info(f"📄 Modèles Gemini disponibles : {available_models}")
         
-        # On utilise un modèle stable et supporté pour generate_content
-        preferred_model = "gemini-1.5"  # remplacer par un autre modèle disponible si nécessaire
+        # Essaye d'utiliser gemini-1.5 si présent, sinon le premier modèle compatible generate_content
+        preferred_model = "gemini-1.5"
+        model_name_to_use = None
+        
         if preferred_model in available_models:
-            model = genai.GenerativeModel(model_name=preferred_model)
-            logging.info(f"✅ IA Gemini {preferred_model} activée.")
+            model_name_to_use = preferred_model
         else:
-            logging.warning(f"⚠️ Modèle {preferred_model} non trouvé. Veuillez choisir un modèle dans la liste ci-dessus.")
+            # Cherche le premier modèle qui supporte generate_content
+            for m in models_info:
+                if "generate_content" in m.get("capabilities", []):
+                    model_name_to_use = m["name"]
+                    logging.warning(f"⚠️ Modèle préféré {preferred_model} non trouvé. Utilisation automatique de {model_name_to_use}.")
+                    break
+        
+        if model_name_to_use:
+            model = genai.GenerativeModel(model_name=model_name_to_use)
+            logging.info(f"✅ IA activée avec le modèle {model_name_to_use}.")
+        else:
+            logging.error("❌ Aucun modèle compatible generate_content disponible.")
             
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
