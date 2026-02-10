@@ -16,16 +16,15 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Configuration IA
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
         model = genai.GenerativeModel("gemini-pro")
-        logging.info("✅ IA Gemini configurée.")
+        logging.info("✅ IA Gemini prête.")
     except Exception as e:
-        logging.error(f"❌ Erreur config Gemini: {e}")
+        logging.error(f"❌ Erreur Gemini: {e}")
 
-# --- 2. FONCTIONS TECHNIQUES ---
+# --- 2. FONCTIONS ---
 
 def charger_historique():
     if os.path.exists(HISTORY_FILE):
@@ -38,79 +37,81 @@ def sauvegarder_historique(hist):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(hist, f, indent=2)
 
 def chercher_serpapi(nom_organisme):
-    """Recherche sur 6 mois avec 20 résultats"""
+    """Recherche sur 6 mois - 20 résultats"""
     if not SERPAPI_KEY: return []
     query = f'"{nom_organisme}" (délibération OR friche OR concours OR aménagement OR ZAC OR "avis de marché")'
-    url = "https://serpapi.com/search"
     params = {
         "engine": "google",
         "q": query,
         "api_key": SERPAPI_KEY,
-        "num": 20, # Volume augmenté
+        "num": 20,
         "gl": "fr",
         "hl": "fr",
-        "tbs": "qdr:m6" # ÉLARGISSEMENT À 6 MOIS
+        "tbs": "qdr:m6" # 6 MOIS
     }
     try:
-        res = requests.get(url, params=params, timeout=20).json()
+        res = requests.get("https://serpapi.com/search", params=params, timeout=20).json()
         return res.get("organic_results", [])
     except: return []
 
-def analyser_ia(item):
-    """Analyse stratégique avec résumé 'Angle Opportunité'"""
-    texte = f"Titre: {item.get('title')}\nSnippet: {item.get('snippet')}"
+def analyser_ia(item, source_name):
+    """Raisonnement IA approfondi"""
+    texte = f"Titre: {item.get('title')}\nExtrait: {item.get('snippet')}"
     
-    prompt = f"""RÔLE : Directeur du Développement pour Urban Agency (Architecture).
-    MISSION : Analyser cet extrait pour détecter une opportunité de projet.
+    prompt = f"""RÔLE : Expert en stratégie foncière pour Urban Agency.
+    CONTEXTE : Tu analyses les signaux web pour détecter des futurs projets d'architecture.
+    
+    MISSION : Analyse ce résultat pour {source_name}.
     
     GRILLE DE SCORE :
-    - 3 : Annonce légale, Avis de marché, Lancement de concours, ZAC.
-    - 2 : Étude de faisabilité, mutation de friche, intention de projet urbain.
-    - 1 : Veille générale, information territoriale.
-    - 0 : Ignorer (RH, archives, annuaire).
+    3 : Opportunité immédiate (Concours, Marché public, Annonce légale de ZAC).
+    2 : Signal faible (Étude de faisabilité, dépollution de friche, intention politique).
+    1 : Veille contextuelle (Article presse, vie du quartier).
+    0 : Hors-sujet (RH, annuaire, archives).
     
-    CONSIGNES DE RÉSUMÉ :
-    Rédige un résumé d'une phrase expliquant l'ANGLE OPPORTUNITÉ (ex: "Potentiel concours de maîtrise d'œuvre suite à l'annonce de dépollution de la friche").
+    TON RAISONNEMENT : 
+    Pourquoi est-ce pertinent pour Urban Agency ? Quelle est l'opportunité cachée ?
     
     RETOURNE UN JSON STRICT :
     {{
-      "titre": "Titre court",
+      "titre": "Titre pro et court",
       "score": 0,
-      "resume": "Résumé stratégique"
+      "opportunite": "Ton analyse stratégique en 1 phrase",
+      "action": "L'action recommandée (ex: Surveiller le BOAMP, Contacter l'EPA)"
     }}
     
     TEXTE : {texte}"""
     
     try:
         res = model.generate_content(prompt)
-        json_text = res.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(json_text)
+        data = json.loads(res.text.replace('```json', '').replace('```', '').strip())
+        return data
     except:
-        return {"score": 0, "titre": item.get('title'), "resume": "Analyse simplifiée"}
+        return {"score": 0, "titre": item.get('title'), "opportunite": "Analyse impossible", "action": "Vérifier manuellement"}
 
 def envoyer_mail(resultats, nom_teste):
     date_str = datetime.now().strftime('%d/%m/%Y')
-    if not resultats: return
-
-    subject = f"🎯 Radar UA {date_str} : {len(resultats)} Signaux (6 derniers mois)"
     
-    blocs = ""
-    for o in sorted(resultats, key=lambda x: x['score'], reverse=True):
-        color = "#e74c3c" if o['score'] == 3 else "#3498db" if o['score'] == 2 else "#95a5a6"
-        blocs += f"""
-        <div style="border-left:5px solid {color}; padding:15px; margin-bottom:15px; background:#fff; border-radius:4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-            <b style="font-size:16px; color:#2c3e50;">{o['titre']}</b> <span style="color:{color}; font-size:12px;">(Score {o['score']}/3)</span><br>
-            <p style="font-size:14px; color:#333; margin:10px 0;"><b>Opportunité :</b> {o['resume']}</p>
-            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">VOIR LA SOURCE →</a>
-        </div>"""
+    # MODIFICATION : On envoie l'e-mail même s'il n'y a que des scores 1 ou 2
+    if not resultats:
+        # On force l'envoi d'un mail de statut pour confirmer que le robot tourne
+        subject = f"🔍 Radar UA {date_str} : Statut Opérationnel (0 signal)"
+        content = f"<p>Le scan de <b>{nom_teste}</b> n'a rien révélé de nouveau ce jour.</p>"
+    else:
+        subject = f"🎯 Radar UA {date_str} : {len(resultats)} Signaux détectés"
+        blocs = ""
+        for o in sorted(resultats, key=lambda x: x['score'], reverse=True):
+            color = "#e74c3c" if o['score'] == 3 else "#3498db" if o['score'] == 2 else "#95a5a6"
+            blocs += f"""
+            <div style="border-left:5px solid {color}; padding:15px; margin-bottom:15px; background:#fff;">
+                <b style="font-size:16px;">{o['titre']}</b> (Score {o['score']}/3)<br>
+                <p style="margin:10px 0;"><b>Analyse :</b> {o.get('opportunite')}</p>
+                <p style="margin:5px 0; color:#27ae60;"><b>Action :</b> {o.get('action')}</p>
+                <a href="{o['url']}" style="color:{color}; text-decoration:none; font-weight:bold;">VOIR LA SOURCE →</a>
+            </div>"""
+        content = f"<h3>Analyse des 20 derniers résultats Google :</h3>{blocs}"
 
-    full_html = f"""<html><body style="background:#f4f4f4; padding:20px; font-family:Arial;">
-        <div style="max-width:600px; margin:auto;">
-            <img src="{LOGO_URL}" height="40"><br>
-            <h2 style="color:#2c3e50; border-bottom:2px solid #eee; padding-bottom:10px;">Radar Stratégique Urban Agency</h2>
-            {blocs}
-        </div>
-    </body></html>"""
+    full_html = f"<html><body style='font-family:Arial; background:#f4f4f4; padding:20px;'><div style='max-width:600px; margin:auto;'>{content}</div></body></html>"
 
     requests.post("https://api.brevo.com/v3/smtp/email", 
         json={"sender": {"name": "IA Urban Agency", "email": "bertrand@urban-agency.com"}, 
@@ -119,9 +120,10 @@ def envoyer_mail(resultats, nom_teste):
         headers={"api-key": BREVO_KEY})
 
 def main():
-    logging.info("🚀 Scan Intensif (20 résultats / 6 mois)")
+    logging.info("🚀 Scan 6 mois / 20 résultats")
     hist = charger_historique()
     resultats = []
+    dernier_nom = "Multi-Cibles"
 
     if not os.path.exists("cibles.csv"): return
 
@@ -130,21 +132,22 @@ def main():
         for row in reader:
             nom = row.get("Nom de l'Organisme")
             if not nom: continue
+            dernier_nom = nom
             
             items = chercher_serpapi(nom)
             for i in items:
                 url = i.get('link')
                 if not url or url in hist: continue
                 
-                analyse = analyser_ia(i)
-                # On ne garde que ce qui est utile (score 1, 2, 3)
+                analyse = analyser_ia(i, nom)
+                # On capture tout ce qui est >= 1 pour être sûr de ne rien rater
                 if analyse.get('score', 0) >= 1:
                     resultats.append({"url": url, "nom_source": nom, **analyse})
                 
                 hist[url] = {"date": datetime.now().strftime('%Y-%m-%d'), "score": analyse.get('score', 0)}
 
-    envoyer_mail(resultats, "Multi-Cibles")
+    envoyer_mail(resultats, dernier_nom)
     sauvegarder_historique(hist)
-    logging.info("🏁 Terminé")
+    logging.info("🏁 Terminé.")
 
 if __name__ == "__main__": main()
