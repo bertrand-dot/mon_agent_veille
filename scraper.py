@@ -21,7 +21,7 @@ client = None
 if GEMINI_KEY:
     try:
         client = genai.Client(api_key=GEMINI_KEY)
-        logging.info("✅ IA Gemini 2.0 Flash activée (Haute Capacité).")
+        logging.info("✅ IA Gemini 1.5 Flash activée (Haute Capacité).")
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
 
@@ -45,15 +45,15 @@ def chercher_serpapi(cible):
         return res.get("organic_results", [])
     except: return []
 
-# --- 3. ANALYSE IA (FIX MODÈLE 2.0) ---
+# --- 3. ANALYSE IA (FIX MODÈLE 1.5 FLASH) ---
 
 def analyser_ia(item, contenu_web):
     if not client: return {"score": 0}
-    time.sleep(1.5) # Anti-429
+    time.sleep(2) # On augmente la pause à 2s pour être très prudent
     
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
     prompt = f"""RÔLE : Directeur du Développement Urban Agency.
-    MISSION : Extraire les données CRITIQUES et identifier les ACTEURS clés.
+    MISSION : Analyser l'opportunité urbaine.
     FORMAT JSON STRICT :
     {{
       "projet": "Nom du site",
@@ -61,30 +61,28 @@ def analyser_ia(item, contenu_web):
       "procedure": "Type de procédure",
       "deadline": "Horizon temporel",
       "budget": "Budget/Surface",
-      "partenaires": "Bailleurs, Promoteurs ou BET cités ou logiques",
+      "partenaires": "Acteurs clés",
       "analyse": "Analyse stratégique (3 phrases max)",
       "action": "Action recommandée"
     }}
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        # Utilisation de gemini-2.0-flash (Stable et haut quota en 2026)
-        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        # Passage au modèle 1.5-flash pour quota maximal (1500/jour)
+        response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
         text_json = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
-        
-        # S'assurer que le score est un entier
-        data['score'] = int(data.get('score', 0))
         return data
     except Exception as e:
-        logging.warning(f"⚠️ Erreur IA sur {item.get('title')} : {e}")
+        # On affiche l'erreur réelle pour comprendre le blocage
+        logging.warning(f"⚠️ Blocage sur {item.get('title')} : {e}")
         return {"score": 0}
 
-# --- 4. DESIGN DU RAPPORT ---
+# --- 4. ENVOI DU MAIL ---
 
 def envoyer_mail(resultats):
     if not resultats: 
-        logging.info("📩 Aucun résultat avec un score >= 1. Pas d'envoi de mail.")
+        logging.info("📩 Aucun résultat pertinent trouvé (score < 1). Pas de mail.")
         return
     
     font_header = "'DIN', 'Alternate Gothic', 'Impact', sans-serif"
@@ -132,7 +130,7 @@ def envoyer_mail(resultats):
               "subject": f"🎯 Radar UA : {len(resultats)} Signaux Bordeaux", "htmlContent": full_html}, 
         headers={"api-key": BREVO_KEY})
 
-# --- 5. EXECUTION ---
+# --- 5. MAIN ---
 
 def main():
     logging.info("🚀 Scan final Bordeaux en cours...")
@@ -143,13 +141,7 @@ def main():
         except: hist = {}
         
     resultats = []
-    cibles = [
-        "Bordeaux Métropole",
-        "Mairie de Bordeaux",
-        "EPA Bordeaux Euratlantique",
-        "EPF Nouvelle-Aquitaine",
-        "La Fabrique de Bordeaux Métropole"
-    ]
+    cibles = ["Bordeaux Métropole", "Mairie de Bordeaux", "EPA Bordeaux Euratlantique", "EPF Nouvelle-Aquitaine", "La Fabrique de Bordeaux Métropole"]
     
     for cible in cibles:
         logging.info(f"🔎 Investigation : {cible}")
@@ -161,12 +153,10 @@ def main():
             texte = extraire_texte_page(url)
             analyse = analyser_ia(i, texte)
             
-            # On ne garde que les scores >= 1
             if isinstance(analyse, dict) and int(analyse.get('score', 0)) >= 1:
                 resultats.append({"url": url, **analyse})
                 logging.info(f"   🎯 Signal identifié : {analyse.get('projet')}")
             
-            # On enregistre dans l'historique
             hist[url] = {"date": datetime.now().strftime('%Y-%m-%d'), "score": analyse.get('score', 0) if isinstance(analyse, dict) else 0}
 
     envoyer_mail(resultats)
