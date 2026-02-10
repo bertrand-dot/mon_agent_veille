@@ -25,7 +25,7 @@ if GEMINI_KEY:
         
         # Récupère tous les modèles disponibles
         models_info = genai.list_models()
-        available_models = [m["name"] for m in models_info]
+        available_models = [m.name for m in models_info]
         logging.info(f"📄 Modèles Gemini disponibles : {available_models}")
         
         # Essaye d'utiliser gemini-1.5 si présent, sinon le premier modèle compatible generate_content
@@ -37,8 +37,8 @@ if GEMINI_KEY:
         else:
             # Cherche le premier modèle qui supporte generate_content
             for m in models_info:
-                if "generate_content" in m.get("capabilities", []):
-                    model_name_to_use = m["name"]
+                if "generate_content" in getattr(m, "capabilities", []):
+                    model_name_to_use = m.name
                     logging.warning(f"⚠️ Modèle préféré {preferred_model} non trouvé. Utilisation automatique de {model_name_to_use}.")
                     break
         
@@ -50,6 +50,7 @@ if GEMINI_KEY:
             
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
+
 
 # --- 2. EXTRACTION PROFONDE ---
 
