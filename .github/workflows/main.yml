@@ -1,49 +1,42 @@
 name: Radar Urban Agency
 
 on:
-  workflow_dispatch:  # Permet de lancer le scan manuellement
   schedule:
-    - cron: '0 8 * * *'  # Lancement automatique tous les jours à 8h00 UTC
-
-# Autorise le robot à sauvegarder le fichier download_history.json
-permissions:
-  contents: write
+    # Exécution automatique tous les jours à 8h00 UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    # Permet de lancer le script manuellement depuis l'onglet Actions
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Récupérer le code du dépôt
-      uses: actions/checkout@v4
+      - name: Récupérer le code du dépôt
+        uses: actions/checkout@v4
 
-    - name: Installer Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Configurer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Installer les dépendances
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests beautifulsoup4 google-generativeai
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 google-genai
 
-    - name: Lancer le Script Radar (SerpApi)
-      env:
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-        SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
-      run: python scraper.py
+      - name: Exécuter le script de veille
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+        run: python scraper.py
 
-    - name: Sauvegarder l'historique (Anti-Erreur 128)
-      run: |
-        git config --global user.name "Urban Agency Bot"
-        git config --global user.email "bot@urban-agency.com"
-        git add download_history.json
-        
-        # On vérifie s'il y a des nouveaux scans à enregistrer
-        if git diff --staged --quiet; then
-          echo "Rien de nouveau à sauvegarder."
-        else
-          git commit -m "MAJ Historique de veille [skip ci]"
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
-        fi
+      - name: Sauvegarder l'historique (Commit & Push)
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "actions@github.com"
+          # On ajoute le fichier d'historique s'il a été modifié
+          git add download_history.json
+          # On ne commit que s'il y a des changements pour éviter les erreurs
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Mise à jour de l'historique de veille" && git push)
