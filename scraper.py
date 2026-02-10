@@ -1,9 +1,8 @@
 import os
 import requests
-import csv
 import json
 import logging
-import time # Nécessaire pour le délai
+import time
 from bs4 import BeautifulSoup
 from google import genai
 from datetime import datetime
@@ -18,12 +17,12 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Initialisation du client IA
+# Initialisation du client IA (Modèle 1.5 Flash pour quota élevé)
 client = None
 if GEMINI_KEY:
     try:
         client = genai.Client(api_key=GEMINI_KEY)
-        logging.info("✅ Moteur Gemini 2.5 Flash activé.")
+        logging.info("✅ IA Gemini 1.5 Flash activée (Haute Capacité).")
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
 
@@ -36,89 +35,95 @@ def extraire_texte_page(url):
         if res.status_code != 200: return ""
         soup = BeautifulSoup(res.text, 'html.parser')
         for s in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']): s.decompose()
-        return " ".join(soup.get_text(separator=' ').split())[:7000]
+        return " ".join(soup.get_text(separator=' ').split())[:7500]
     except: return ""
 
 def chercher_serpapi(cible):
-    query = f'"{cible}" (Bordeaux OR Métropole) (friche OR "régénération urbaine" OR délibération OR "portage foncier" OR ZAC OR "avis de marché")'
-    params = {"engine": "google", "q": query, "api_key": SERPAPI_KEY, "num": 30, "gl": "fr", "hl": "fr", "tbs": "qdr:m6"}
+    # Requête focalisée sur la mutation urbaine et les friches
+    query = f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "portage foncier" OR ZAC OR "avis de marché")'
+    params = {"engine": "google", "q": query, "api_key": SERPAPI_KEY, "num": 20, "gl": "fr", "hl": "fr", "tbs": "qdr:m6"}
     try:
         res = requests.get("https://serpapi.com/search", params=params, timeout=20).json()
         return res.get("organic_results", [])
     except: return []
 
-# --- 3. ANALYSE IA AVEC PAUSE ---
+# --- 3. MOTEUR DE RAISONNEMENT (SCORE /5 & PARTENAIRES) ---
 
 def analyser_ia(item, contenu_web):
     if not client: return {"score": 0}
     
-    # --- CORRECTIF 429 : Pause de 2 secondes avant l'appel ---
-    time.sleep(2) 
+    # Cadencement anti-429
+    time.sleep(1.5) 
     
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
     prompt = f"""RÔLE : Directeur du Développement Urban Agency.
-    MISSION : Extraire les données CRITIQUES d'un projet urbain à Bordeaux.
+    MISSION : Extraire les données CRITIQUES et identifier les ACTEURS clés.
+    
+    CONSIGNES :
+    - Score : Sur 5 (1: Veille, 5: Priorité absolue).
+    - Analyse : 3 phrases maximum. Focus sur la mutation architecturale.
+    - Identification précise de la PROCEDURE, DEADLINE, BUDGET et PARTENAIRES.
+
     FORMAT JSON STRICT :
     {{
-      "projet": "Nom du site",
+      "projet": "Nom du site ou projet",
       "score": 0,
-      "procedure": "Type de procédure",
-      "deadline": "Horizon temporel",
-      "budget": "Budget ou surface",
-      "analyse": "Analyse stratégique (3 phrases max)",
-      "action": "Action recommandée"
+      "procedure": "Type de procédure (ex: ZAC, Concours, PUP)",
+      "deadline": "Horizon temporel clé",
+      "budget": "Budget ou surface mentionnés",
+      "partenaires": "Bailleurs, Promoteurs ou BET cités ou logiques",
+      "analyse": "Ton analyse stratégique UA",
+      "action": "Action concrète recommandée"
     }}
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-        data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
+        response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
+        text_json = response.text.replace('```json', '').replace('```', '').strip()
+        data = json.loads(text_json)
+        
         return {
             "projet": data.get("projet", item.get("title", "Projet inconnu")),
-            "score": min(int(data.get("score", 0)), 5), # On bride à 5
+            "score": min(int(data.get("score", 0)), 5),
             "procedure": data.get("procedure", "N/A"),
             "deadline": data.get("deadline", "N/A"),
             "budget": data.get("budget", "N/A"),
+            "partenaires": data.get("partenaires", "N/A"),
             "analyse": data.get("analyse", "Analyse en consultant la source."),
             "action": data.get("action", "Surveiller le dossier.")
         }
-    except Exception as e:
-        logging.warning(f"⚠️ Erreur IA : {e}")
+    except:
         return {"score": 0}
 
-# --- 4. DESIGN DU RAPPORT (DIN & ARIAL) ---
+# --- 4. INTERFACE GRAPHIQUE (DIN & ARIAL) ---
 
 def envoyer_mail(resultats):
     if not resultats: return
-    date_str = datetime.now().strftime('%d/%m/%Y')
     
-    # Styles Typo
+    date_str = datetime.now().strftime('%d/%m/%Y')
     font_header = "'DIN', 'Alternate Gothic', 'Impact', sans-serif"
     font_body = "Arial, Helvetica, sans-serif"
     
     blocs = ""
-    for o in sorted(resultats, key=lambda x: x['score'], reverse=True):
+    for o in sorted(resultats, key=lambda x: x.get('score', 0), reverse=True):
         stars = "⭐" * int(o.get('score', 0))
         
         blocs += f"""
         <div style="border: 1px solid #e0e0e0; margin-bottom: 30px; background: #ffffff; border-radius: 4px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.02);">
             <div style="background: #2c3e50; color: #ffffff; padding: 15px 20px; font-family: {font_header}; text-transform: uppercase;">
-                <table width="100%">
-                    <tr>
-                        <td style="font-size: 18px; letter-spacing: 1px;">🏗️ {o.get('projet')}</td>
-                        <td align="right" style="font-size: 16px;">{stars}</td>
-                    </tr>
-                </table>
+                <table width="100%"><tr>
+                    <td style="font-size: 18px; letter-spacing: 1px;">🏗️ {o.get('projet')}</td>
+                    <td align="right" style="font-size: 16px;">{stars}</td>
+                </tr></table>
             </div>
             
-            <div style="padding: 12px 20px; background: #f8f9fa; border-bottom: 1px solid #eeeeee; font-family: {font_body}; font-size: 12px; color: #666666;">
-                <table width="100%">
-                    <tr>
-                        <td width="33%">📝 <b>PROCÉDURE :</b> {o.get('procedure')}</td>
-                        <td width="33%">📅 <b>DEADLINE :</b> <span style="color: #d35400; font-weight: bold;">{o.get('deadline')}</span></td>
-                        <td width="33%">💰 <b>BUDGET/SURFACE :</b> {o.get('budget')}</td>
-                    </tr>
-                </table>
+            <div style="padding: 12px 20px; background: #f8f9fa; border-bottom: 1px solid #eeeeee; font-family: {font_body}; font-size: 11px; color: #666666;">
+                <table width="100%"><tr>
+                    <td width="25%">📝 <b>PROCÉDURE :</b> {o.get('procedure')}</td>
+                    <td width="25%">📅 <b>DEADLINE :</b> <span style="color: #d35400; font-weight: bold;">{o.get('deadline')}</span></td>
+                    <td width="25%">💰 <b>BUDGET/SURFACE :</b> {o.get('budget')}</td>
+                    <td width="25%">🤝 <b>PARTENAIRES :</b> {o.get('partenaires')}</td>
+                </tr></table>
             </div>
             
             <div style="padding: 20px; font-family: {font_body};">
@@ -138,13 +143,13 @@ def envoyer_mail(resultats):
         <div style="background: #ffffff; padding: 30px 0; text-align: center; border-bottom: 1px solid #e5e7eb;">
             <img src="{LOGO_URL}" height="60" alt="Urban Agency">
         </div>
-        <div style="max-width: 750px; margin: 40px auto; padding: 0 20px;">
+        <div style="max-width: 800px; margin: 40px auto; padding: 0 20px;">
             <h1 style="font-family: {font_header}; color: #111827; text-align: center; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 40px;">
-                Intelligence Territoriale - Bordeaux
+                Intelligence Territoriale - Radar UA
             </h1>
             {blocs}
             <div style="text-align: center; margin-top: 50px; padding-bottom: 40px; font-family: {font_body}; font-size: 11px; color: #9ca3af;">
-                Rapport généré par IA Urban Agency 2.5 Flash • {date_str}
+                Rapport généré par IA Urban Agency 1.5 Flash • {date_str}
             </div>
         </div>
     </body>
@@ -153,13 +158,13 @@ def envoyer_mail(resultats):
     requests.post("https://api.brevo.com/v3/smtp/email", 
         json={"sender": {"name": "Radar Urban Agency", "email": "bertrand@urban-agency.com"}, 
               "to": [{"email": "bertrand@urban-agency.com"}], 
-              "subject": subject, "htmlContent": full_html}, 
+              "subject": f"🎯 Radar UA : {len(resultats)} Signaux Stratégiques", "htmlContent": full_html}, 
         headers={"api-key": BREVO_KEY})
 
-# --- 5. MAIN ---
+# --- 5. EXECUTION ---
 
 def main():
-    logging.info("🚀 Scan Stratégique UA avec cadencement anti-429...")
+    logging.info("🚀 Lancement du Scan UA (Version Stable 1.5 Flash)")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
@@ -167,7 +172,15 @@ def main():
         except: hist = {}
         
     resultats = []
-    cibles = ["Bordeaux Métropole", "EPA Bordeaux Euratlantique", "EPF Nouvelle-Aquitaine", "La Fabrique de Bordeaux Métropole"]
+    # Liste consolidée des cibles majeures
+    cibles = [
+        "Bordeaux Métropole", 
+        "EPA Bordeaux Euratlantique", 
+        "EPF Nouvelle-Aquitaine", 
+        "La Fabrique de Bordeaux Métropole",
+        "Grand Paris Aménagement",
+        "EPA Euroméditerranée"
+    ]
     
     for cible in cibles:
         logging.info(f"🔎 Investigation : {cible}")
@@ -179,10 +192,11 @@ def main():
             texte = extraire_texte_page(url)
             analyse = analyser_ia(i, texte)
             
-            if analyse.get('score', 0) >= 1:
+            if isinstance(analyse, dict) and analyse.get('score', 0) >= 1:
                 resultats.append({"url": url, **analyse})
+                logging.info(f"   🎯 Signal identifié (Score {analyse['score']}): {analyse['projet']}")
             
-            hist[url] = {"date": datetime.now().strftime('%Y-%m-%d'), "score": analyse.get('score', 0)}
+            hist[url] = {"date": datetime.now().strftime('%Y-%m-%d'), "score": analyse.get('score', 0) if isinstance(analyse, dict) else 0}
 
     envoyer_mail(resultats)
     with open(HISTORY_FILE, 'w') as f: json.dump(hist, f, indent=2)
