@@ -1,57 +1,40 @@
 import os
 import requests
-import csv
-import re
 import json
+import re
 from bs4 import BeautifulSoup
 import fitz  # PyMuPDF
 import google.generativeai as genai
-from urllib.parse import urljoin, urlparse
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURATION ---
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-BREVO_KEY = os.environ.get("BREVO_API_KEY")
-HISTORY_FILE = "download_history.json"
+# --- 1. PARAMÈTRES DU TEST (À REMPLIR) ---
+# Collez vos clés ici pour le test (entre guillemets)
+API_GEMINI = "VOTRE_CLE_GEMINI_ICI"
+API_BREVO = "VOTRE_CLE_BREVO_ICI"
+
+# La cible unique à tester
+URL_CIBLE = "https://www.exemple.com/actualites/projet-zac.pdf"
+NOM_ORGANISME = "Mairie de Test"  # Important pour le contexte de l'IA
+
+# --- CONFIGURATION ---
+LOGO_URL = "https://urban-agency.com/assets/cp-logo.png"
 JOURS_RETENTION = 90
 
-genai.configure(api_key=GEMINI_KEY)
+# Configuration IA
+if "VOTRE_CLE" in API_GEMINI:
+    print("❌ ERREUR : Vous devez coller vos clés API lignes 12 et 13 !")
+    exit()
+
+genai.configure(api_key=API_GEMINI)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- 2. GESTION MÉMOIRE ---
-
-def charger_historique():
-    data = {}
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, 'r') as f:
-                content = json.load(f)
-                if isinstance(content, dict): data = content
-        except: pass
-    
-    # Nettoyage automatique des vieux dossiers
-    limit_date = datetime.now() - timedelta(days=JOURS_RETENTION)
-    clean_data = {}
-    for url, info in data.items():
-        try:
-            date_saved = datetime.strptime(info['date_detection'], '%Y-%m-%d')
-            if date_saved > limit_date: clean_data[url] = info
-        except: continue
-    return clean_data
-
-def sauvegarder_historique(historique):
-    try:
-        with open(HISTORY_FILE, 'w') as f: json.dump(historique, f, indent=2)
-    except: pass
-
-# --- 3. SESSION & OUTILS ---
+# --- 2. OUTILS (IDENTIQUES AU SCRAPER PRINCIPAL) ---
 
 def creer_session():
     session = requests.Session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Connection': 'keep-alive'
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
     })
     return session
 
@@ -66,22 +49,17 @@ def est_recent_pdf(pdf_content):
     except: return True
     return True
 
-def est_grand_organisme(nom):
-    return any(m in nom.lower() for m in ['epa', 'grand paris', 'métropole', 'metropole', 'part-dieu', 'défense', 'euratlantique'])
-
 def type_organisme(nom):
-    """Définit le type pour orienter l'IA"""
     nom_l = nom.lower()
-    if any(x in nom_l for x in ['epa', 'epf', 'amenagement', 'aménagement']):
-        return "EPA"
-    if any(x in nom_l for x in ['métropole', 'metropole', 'ville', 'mairie', 'communauté']):
-        return "METROPOLE"
+    if any(x in nom_l for x in ['epa', 'epf', 'amenagement']): return "EPA"
+    if any(x in nom_l for x in ['métropole', 'metropole', 'ville', 'mairie']): return "METROPOLE"
     return "AUTRE"
 
 def nettoyer_texte(texte):
     return re.sub(r'\s+', ' ', texte).strip()
 
 def extraire_contenu_url(session, target_url):
+    print(f"🔄 Lecture de : {target_url}")
     try:
         response = session.get(target_url, timeout=20)
         response.raise_for_status()
@@ -90,61 +68,43 @@ def extraire_contenu_url(session, target_url):
         texte_final = ""
         
         if 'pdf' in content_type or target_url.lower().endswith('.pdf'):
-            if not est_recent_pdf(response.content): return None
+            print("   📄 Type : PDF")
+            if not est_recent_pdf(response.content):
+                print("   ❌ PDF Trop vieux (Date métadata > 90 jours)")
+                return None
             with fitz.open(stream=response.content, filetype="pdf") as doc:
                 texte_final = "".join([page.get_text() for page in doc[:6]])
         else:
+            print("   🌐 Type : Page Web")
             soup = BeautifulSoup(response.text, 'html.parser')
             for tag in soup(['script', 'style', 'nav', 'footer', 'aside', 'form', 'iframe']): tag.decompose()
             contenu = soup.find('main') or soup.find('article') or soup.body
             if contenu: texte_final = contenu.get_text(separator=' ')
                 
         return nettoyer_texte(texte_final)
-    except: return None
+    except Exception as e:
+        print(f"   ❌ Erreur technique : {e}")
+        return None
 
-# --- 4. CERVEAU IA (PROMPT AVEC MATURITÉ) ---
-
-def analyser_ia_urban_agency(texte, source, categorie, type_org):
+def analyser_ia_urban_agency(texte, source, type_org):
+    print("🧠 Analyse IA en cours...")
     date_lim = (datetime.now() - timedelta(days=JOURS_RETENTION)).strftime('%d/%m/%Y')
     
     prompt = f"""
-    RÔLE
-    Tu es Directeur du Développement d’Urban Agency (architecture / urbanisme).
+    RÔLE : Directeur Dév. Urban Agency.
+    CONTEXTE : {source} ({type_org})
+    DATE LIMITE : {date_lim} (Si antérieur -> SCORE 0)
 
-    CONTEXTE
-    Source : {source}
-    Catégorie : {categorie}
-    Type d’organisme : {type_org}
-    Date limite validité : {date_lim} (Si antérieur -> SCORE 0)
+    STRATÉGIE : Priorité Restructuration lourde, Friches, ZAC, Équipements >10M€.
 
-    ADAPTATION STRATÉGIQUE
-    - EPA / EPF : Prioriser restructuration lourde, friches, ZAC, actifs complexes.
-    - MÉTROPOLE / VILLE : Prioriser équipements publics, concours, AMI.
-    - AUTRE : Grille standard.
+    TACHE : Analyse ce texte isolé pour un test de validation.
 
-    GRILLE DE SCORE
-    3 = Priorité forte (Alignement parfait + Maturité Moyenne/Elevée)
-    2 = Intérêt modéré OU Maturité faible
-    1 = Veille stratégique
-    0 = Non pertinent / Trop vieux
-
-    MATURITÉ (Critère clé)
-    - Faible : intention, étude amont, pas de calendrier
-    - Moyen : programmation, budget évoqué
-    - Eleve : consultation, concours, calendrier annoncé
-
-    THÈMES AUTORISÉS
-    - Restructuration / Réhabilitation
-    - Friches / ZAC / Waterfront
-    - Équipement public
-    - Logement
-    - Autre
-
-    FORMAT JSON STRICT
+    FORMAT JSON STRICT :
     {{
       "titre": "Titre court",
-      "theme": "Thème choisi",
-      "resume": "Résumé analytique",
+      "theme": "Restructuration / Friche / Waterfront / Équipement public / Logement",
+      "resume": "Résumé analytique (2 phrases)",
+      "chiffres_cles": "ex: 'Budget 15M€' ou 'Non précisé'",
       "maturite": "Faible | Moyen | Eleve",
       "score": 0 | 1 | 2 | 3
     }}
@@ -155,132 +115,127 @@ def analyser_ia_urban_agency(texte, source, categorie, type_org):
     try:
         res = model.generate_content(prompt)
         return json.loads(res.text.replace('```json', '').replace('```', '').strip())
-    except: return {"score": 0}
+    except Exception as e:
+        print(f"❌ Erreur IA : {e}")
+        return {"score": 0}
 
-# --- 5. ENVOI EMAIL (DESIGN PRO) ---
+# --- 3. FORMATAGE & ENVOI (DESIGN PRO) ---
 
-def generer_html(item, is_new):
-    # Couleurs Score
-    if item['score'] == 3:
-        border, badge_txt = "#e74c3c", "🔥 PRIORITÉ"
-    elif item['score'] == 2:
-        border, badge_txt = "#3498db", "✅ INTÉRÊT"
-    else:
-        border, badge_txt = "#27ae60", "👀 VEILLE"
+def generer_html(item):
+    # Couleurs
+    if item['score'] == 3: border = "#e74c3c"
+    elif item['score'] == 2: border = "#2980b9"
+    else: border = "#27ae60"
 
-    # Style Maturité
     mat = item.get('maturite', 'Inconnue').capitalize()
-    color_mat = "#d35400" if "Eleve" in mat else "#f39c12" if "Moyen" in mat else "#7f8c8d"
-
-    bg, txt, opac = ("white", "#2c3e50", "1") if is_new else ("#f9f9f9", "#95a5a6", "0.7")
-    date_badge = "NOUVEAU" if is_new else f"Vu le {item['date_detection']}"
+    color_mat = "#d35400" if "Eleve" in mat else "#f39c12" if "Moyen" in mat else "#95a5a6"
     
     icon = "🏗️" if "RESTRUCT" in item.get('theme','').upper() else "🏭" if "FRICHE" in item.get('theme','').upper() else "📌"
-    
+    font_heading = "'DIN', 'DIN Pro', 'Roboto', 'Helvetica Neue', Helvetica, Arial, sans-serif"
+    font_body = "Arial, sans-serif"
+
     return f"""
-    <div style="opacity:{opac}; border-left: 5px solid {border}; background: {bg}; padding: 15px; margin-bottom: 10px; border-radius: 4px;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <strong style="color:{txt}; font-size:14px;">{icon} {item['nom_source']}</strong>
+    <div style="border-left: 4px solid {border}; background: #ffffff; padding: 20px; margin-bottom: 20px; font-family:{font_body}; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">
+            <div style="font-family:{font_heading}; text-transform:uppercase; font-size:12px; letter-spacing:1px; color:#7f8c8d;">
+                {icon} {item['nom_source']} (TEST UNITAIRE)
+            </div>
             <div style="text-align:right;">
-                <span style="background:{border}; color:white; padding:2px 6px; border-radius:3px; font-size:10px; font-weight:bold;">{badge_txt}</span>
-                <span style="border:1px solid {color_mat}; color:{color_mat}; padding:1px 5px; border-radius:3px; font-size:10px; margin-left:3px;">Maturité {mat}</span>
+                <span style="font-family:{font_heading}; color:#e74c3c; font-size:10px; font-weight:bold;">NOUVEAU</span><br>
+                <span style="font-size:10px; color:{color_mat}; font-weight:bold;">Maturité {mat}</span>
             </div>
         </div>
-        <div style="font-weight:bold; color:{txt}; font-size:15px; margin:8px 0;">{item['titre']}</div>
-        <div style="font-size:13px; color:{txt}; line-height:1.4;">{item['resume']}</div>
-        <div style="margin-top:8px; display:flex; justify-content:space-between; align-items:center;">
-             <span style="font-size:10px; background:#eee; padding:2px 5px; border-radius:3px; color:#555;">{item['theme']}</span>
-             <a href="{item['url']}" style="color:{border}; font-size:11px; text-decoration:none; font-weight:bold;">Voir Source →</a>
+        <div style="font-family:{font_heading}; font-weight:700; color:#2c3e50; font-size:16px; margin-bottom:8px;">{item['titre']}</div>
+        <div style="font-size:13px; color:#444; line-height:1.5; margin-bottom:10px;">{item['resume']}</div>
+        <div style="background-color:#f4f6f7; padding:8px 12px; border-radius:2px; font-size:12px; color:#2c3e50; font-weight:bold; display:inline-block; margin-bottom:10px; border-left:2px solid #bdc3c7;">
+            📊 {item.get('chiffres_cles', 'Non précisé')}
+        </div>
+        <div style="margin-top:5px; padding-top:10px; border-top:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+             <span style="font-size:10px; color:#95a5a6; text-transform:uppercase;">{item['theme']}</span>
+             <a href="{item['url']}" style="color:{border}; font-family:{font_heading}; font-size:11px; text-decoration:none; font-weight:bold;">ACCÉDER À LA SOURCE →</a>
         </div>
     </div>
     """
 
-def envoyer_mail(nouveaux, anciens):
+def envoyer_mail_test(item):
     url = "https://api.brevo.com/v3/smtp/email"
     date_jour = datetime.now().strftime('%d/%m/%Y')
-    sujet = f"UA_Veille Opportunités_{date_jour}"
     
-    intro = f"Voici les {len(nouveaux)} nouvelles détections." if nouveaux else "R.A.S ce matin. Voici l'historique :"
-    html = "".join([generer_html(x, True) for x in nouveaux]) + "".join([generer_html(x, False) for x in anciens])
+    font_heading = "'DIN', 'DIN Pro', 'Roboto', 'Helvetica', Arial, sans-serif"
     
-    payload = {
-        "sender": {"name": "IA Urban Agency", "email": "bertrand@urban-agency.com"},
-        "to": [{"email": "bertrand@urban-agency.com"}],
-        "subject": sujet,
-        "htmlContent": f"<html><body style='font-family:Helvetica; background:#f4f4f4; padding:20px;'><div style='max-width:600px; margin:auto; background:white; padding:20px;'><h2>Dashboard {date_jour}</h2><p>{intro}</p>{html}</div></body></html>"
-    }
-    requests.post(url, json=payload, headers={"api-key": BREVO_KEY})
-
-# --- 6. MAIN ---
-
-def main():
-    if not os.path.exists('cibles.csv'): return
-    historique = charger_historique()
-    leads_new = []
-    session = creer_session()
-
-    lignes = []
-    # Lecture CSV Robuste (Multi-encodage)
-    for enc in ['utf-8', 'latin-1', 'cp1252']:
-        try:
-            with open('cibles.csv', encoding=enc) as f: lines=f.readlines(); lignes=lines; break
-        except: continue
+    html_card = generer_html(item)
     
-    sep = ';' if lignes and ';' in lignes[0] else ','
-    lecteur = csv.DictReader(lignes, delimiter=sep)
+    body = f"""
+    <html>
+    <head><link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet"></head>
+    <body style="margin:0; padding:0; background-color:#f4f4f4; font-family:Arial, sans-serif;">
+        <div style="max-width:650px; margin:0 auto; background-color:#ffffff; min-height:100vh;">
+            <div style="padding:30px 20px; text-align:center; border-bottom:1px solid #eeeeee;">
+                <img src="{LOGO_URL}" alt="URBAN AGENCY" style="max-height:50px; width:auto;">
+            </div>
+            <div style="padding:40px 20px 20px 20px; text-align:center;">
+                <p style="font-family:{font_heading}; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:#95a5a6; margin:0;">TEST UNITAIRE • {date_jour}</p>
+                <h1 style="font-family:{font_heading}; font-size:24px; letter-spacing:1px; text-transform:uppercase; color:#2c3e50; margin:10px 0;">1 RÉSULTAT DE TEST</h1>
+            </div>
+            <div style="padding:0 20px 40px 20px;">
+                {html_card}
+                <div style="margin:20px 0; font-size:12px; color:#7f8c8d; text-align:center; background:#eee; padding:10px; border-radius:4px;">
+                    Ceci est un test manuel déclenché pour valider l'URL :<br>
+                    <a href="{item['url']}" style="color:#555;">{item['url']}</a>
+                </div>
+            </div>
+            <div style="background-color:#2c3e50; color:white; padding:20px; text-align:center; font-size:10px; font-family:{font_heading}; letter-spacing:1px;">URBAN AGENCY • INTELLIGENCE ARTIFICIELLE</div>
+        </div>
+    </body>
+    </html>
+    """
     
-    exclude = ['contact', 'mentions', 'legales', 'connexion', 'login', 'cookies']
-    print(f"--- Scan Démarré ({len(historique)} en mémoire) ---")
+    print("📧 Envoi de l'email via Brevo...")
+    try:
+        r = requests.post(url, json={"sender": {"name": "IA Urban Agency (Test)", "email": "bertrand@urban-agency.com"}, "to": [{"email": "bertrand@urban-agency.com"}], "subject": f"⚡ TEST CIBLE : {item['titre']}", "htmlContent": body}, headers={"api-key": API_BREVO})
+        if r.status_code in [200, 201, 202]:
+            print("✅ Email envoyé avec succès ! Vérifiez votre boîte de réception.")
+        else:
+            print(f"❌ Erreur Brevo : {r.text}")
+    except Exception as e:
+        print(f"❌ Erreur connexion : {e}")
 
-    for ligne in lecteur:
-        nom = ligne.get("Nom de l'Organisme") or ligne.get("Nom de l'organisme")
-        if not nom: continue
-        
-        org_type = type_organisme(nom)
-        limite = 10 if est_grand_organisme(nom) else 5
-        cpt = 0
-        urls = {"Actu": ligne.get("URL Actualités / Projets"), "Presse": ligne.get("URL Communiqués de Presse"), "RAA": ligne.get("URL Délibérations / Actes (RAA)")}
-        
-        print(f"👉 {nom} ({org_type})")
-        for cat, url_source in urls.items():
-            if not url_source or "http" not in str(url_source): continue
-            try:
-                res = session.get(url_source.strip(), timeout=15)
-                soup = BeautifulSoup(res.text, 'html.parser')
-                
-                for link in soup.find_all('a', href=True):
-                    if cpt >= limite: break
-                    full_url = urljoin(url_source.strip(), link['href'])
-
-                    if any(excl in full_url.lower() for excl in exclude): continue
-                    if urlparse(full_url).netloc != urlparse(url_source).netloc and 'epa' not in full_url: continue
-                    if full_url in historique: continue 
-                    
-                    texte = extraire_contenu_url(session, full_url)
-                    if texte and len(texte) > 300:
-                        data = analyser_ia_urban_agency(texte, nom, cat, org_type)
-                        
-                        if data.get('score', 0) >= 1:
-                            info = {
-                                "url": full_url, "date_detection": datetime.now().strftime('%Y-%m-%d'),
-                                "nom_source": nom, "titre": data.get('titre', 'Projet'),
-                                "theme": data.get('theme', 'Divers'), "resume": data.get('resume', ''),
-                                "maturite": data.get('maturite', 'Non précisé'),
-                                "score": data['score']
-                            }
-                            leads_new.append(info)
-                            historique[full_url] = info
-                            cpt += 1
-                            print(f"   🔥 {info['titre']} (Maturité: {info['maturite']})")
-            except: pass
-
-    # TRI & SAUVEGARDE
-    leads_old = [v for k,v in historique.items() if k not in [x['url'] for x in leads_new]]
-    leads_old.sort(key=lambda x: x['date_detection'], reverse=True)
-    
-    sauvegarder_historique(historique)
-    envoyer_mail(leads_new, leads_old)
-    print("✅ Terminé & Rapport envoyé.")
+# --- 4. EXÉCUTION DU TEST ---
 
 if __name__ == "__main__":
-    main()
+    print(f"--- 🧪 DÉMARRAGE DU TEST CIBLÉ SUR : {NOM_ORGANISME} ---")
+    
+    session = creer_session()
+    texte = extraire_contenu_url(session, URL_CIBLE)
+    
+    if texte and len(texte) > 300:
+        print(f"✅ Contenu extrait ({len(texte)} caractères).")
+        
+        # Filtrage bruit (Optionnel pour le test mais présent dans le main)
+        mots_bruit = ['menu', 'cantine', 'vaccination', 'concert']
+        if any(b in texte.lower() for b in mots_bruit):
+            print("⚠️ Attention : Ce texte contient des mots-clés de 'Bruit' (ex: menu, cantine).")
+        
+        type_org = type_organisme(NOM_ORGANISME)
+        data = analyser_ia_urban_agency(texte, NOM_ORGANISME, type_org)
+        
+        print("\n📊 RÉSULTAT IA :")
+        print(json.dumps(data, indent=4, ensure_ascii=False))
+        
+        # Préparation de l'objet pour l'email
+        item = {
+            "url": URL_CIBLE,
+            "date_detection": datetime.now().strftime('%Y-%m-%d'),
+            "nom_source": NOM_ORGANISME,
+            "titre": data.get('titre', 'Sans titre'),
+            "theme": data.get('theme', 'Autre'),
+            "resume": data.get('resume', 'Pas de résumé'),
+            "chiffres_cles": data.get('chiffres_cles', 'Non précisé'),
+            "maturite": data.get('maturite', 'Inconnue'),
+            "score": data.get('score', 0)
+        }
+        
+        envoyer_mail_test(item)
+        
+    else:
+        print("❌ Échec : Impossible d'extraire le texte (Page vide, bloquée ou trop courte).")
