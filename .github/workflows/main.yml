@@ -1,9 +1,9 @@
 name: Radar Urban Agency
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Permet de lancer manuellement
   schedule:
-    - cron: '0 8 * * *'
+    - cron: '0 8 * * *'  # Lance tous les jours à 8h00 UTC
 
 permissions:
   contents: write
@@ -15,9 +15,6 @@ jobs:
     steps:
     - name: Récupérer le code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Installer Python
       uses: actions/setup-python@v5
@@ -27,7 +24,7 @@ jobs:
     - name: Installer les dépendances
       run: |
         python -m pip install --upgrade pip
-        pip install requests beautifulsoup4 google-genai pymupdf
+        pip install requests beautifulsoup4 google-generativeai pymupdf
 
     - name: Lancer le Script Intelligence
       env:
@@ -37,14 +34,16 @@ jobs:
         GOOGLE_SEARCH_CX: ${{ secrets.GOOGLE_SEARCH_CX }}
       run: python scraper.py
 
-    - name: Sauvegarder l'historique
+    - name: Sauvegarder l'historique (Force Auth)
       run: |
         git config --global user.name "Urban Agency Bot"
         git config --global user.email "bot@urban-agency.com"
-        git add -A
+        git add download_history.json
+        # On vérifie s'il y a des changements
         if git diff --staged --quiet; then
           echo "Rien à sauvegarder."
         else
           git commit -m "Mise à jour historique [skip ci]"
-          git push
+          # COMMANDE MAGIQUE POUR ÉVITER L'ERREUR 128 :
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
         fi
