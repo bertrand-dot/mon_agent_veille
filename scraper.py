@@ -17,15 +17,16 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# --- IA CONFIGURATION (MISE À JOUR VERS 1.5 FLASH) ---
+# --- IA CONFIGURATION (NOM CANONIQUE CORRIGÉ) ---
+model = None
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        # On utilise gemini-1.5-flash pour éviter l'erreur 404
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # "models/gemini-1.5-flash" est le nom universel accepté
+        model = genai.GenerativeModel("models/gemini-1.5-flash")
         logging.info("✅ IA Gemini 1.5 Flash activée.")
     except Exception as e:
-        logging.error(f"❌ Erreur Gemini: {e}")
+        logging.error(f"❌ Erreur config Gemini: {e}")
 
 # --- 2. EXTRACTION PROFONDE ---
 
@@ -35,10 +36,9 @@ def extraire_texte_page(url):
         res = requests.get(url, timeout=12, headers=headers)
         if res.status_code != 200: return ""
         soup = BeautifulSoup(res.text, 'html.parser')
-        # On nettoie la page des éléments inutiles
         for s in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']): s.decompose()
         text = soup.get_text(separator=' ')
-        return " ".join(text.split())[:6000] # Limite augmentée à 6000 pour 1.5 Flash
+        return " ".join(text.split())[:6000]
     except: return ""
 
 def chercher_serpapi(cible):
@@ -52,12 +52,11 @@ def chercher_serpapi(cible):
 # --- 3. ANALYSE AVEC SECURITE ANTI-ERREUR ---
 
 def analyser_ia(item, contenu_web):
-    """Analyse stratégique avec protection contre les clés manquantes"""
+    if not model: return {"score": 0}
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
     
-    prompt = f"""RÔLE : Directeur du Développement Urban Agency (Architecture).
+    prompt = f"""RÔLE : Directeur du Développement Urban Agency.
     MISSION : Analyser le potentiel de régénération urbaine à Bordeaux.
-    
     FORMAT JSON STRICT :
     {{
       "projet": "Nom du site ou projet",
@@ -65,19 +64,17 @@ def analyser_ia(item, contenu_web):
       "analyse": "Ton raisonnement stratégique sur l'opportunité",
       "action": "Action concrète recommandée"
     }}
-    
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
         res = model.generate_content(prompt)
         text_json = res.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
-        
         return {
             "projet": data.get("projet", item.get("title", "Projet inconnu")),
             "score": int(data.get("score", 0)),
-            "analyse": data.get("analyse") or "Analyse disponible en consultant la source.",
-            "action": data.get("action") or "Surveiller l'évolution du dossier."
+            "analyse": data.get("analyse") or "Analyse en consultant la source.",
+            "action": data.get("action") or "Surveiller l'évolution."
         }
     except Exception as e:
         logging.warning(f"⚠️ Erreur analyse IA : {e}")
@@ -87,7 +84,6 @@ def analyser_ia(item, contenu_web):
 
 def envoyer_mail(resultats):
     if not resultats: return
-    
     date_str = datetime.now().strftime('%d/%m/%Y')
     subject = f"🎯 Radar UA Bordeaux : {len(resultats)} Opportunités"
     
@@ -99,7 +95,7 @@ def envoyer_mail(resultats):
             <b style="font-size:17px; color:#2c3e50;">{o['projet']}</b> <span style="font-size:12px;">(Score {o['score']}/3)</span><br>
             <p style="margin:10px 0; font-size:14px; color:#333;"><b>Analyse :</b> {o['analyse']}</p>
             <p style="margin:5px 0; font-size:14px; color:#27ae60;"><b>Action :</b> {o['action']}</p>
-            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">CONSULTER LA SOURCE →</a>
+            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">LIRE LA SOURCE →</a>
         </div>"""
 
     full_html = f"""<html><body style="font-family:Arial; background:#f4f4f4; padding:20px;">
@@ -119,7 +115,7 @@ def envoyer_mail(resultats):
 # --- 5. MAIN ---
 
 def main():
-    logging.info("🚀 Scan correctif 1.5 Flash en cours...")
+    logging.info("🚀 Scan final 1.5 Flash (Canonique) en cours...")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
