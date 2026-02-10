@@ -4,7 +4,7 @@ import csv
 import json
 import logging
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+from google import genai # Nouveau standard 2026
 from datetime import datetime
 
 # --- 1. CONFIGURATION ---
@@ -17,40 +17,14 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# --- IA CONFIGURATION (ROBUSTE) ---
-model = None
+# --- IA CONFIGURATION (MODERNE & DIRECTE) ---
+client = None
 if GEMINI_KEY:
     try:
-        genai.configure(api_key=GEMINI_KEY)
-        
-        # Récupère tous les modèles disponibles
-        models_info = genai.list_models()
-        available_models = [m.name for m in models_info]
-        logging.info(f"📄 Modèles Gemini disponibles : {available_models}")
-        
-        # Essaye d'utiliser gemini-1.5 si présent, sinon le premier modèle compatible generate_content
-        preferred_model = "gemini-1.5"
-        model_name_to_use = None
-        
-        if preferred_model in available_models:
-            model_name_to_use = preferred_model
-        else:
-            # Cherche le premier modèle qui supporte generate_content
-            for m in models_info:
-                if "generate_content" in getattr(m, "capabilities", []):
-                    model_name_to_use = m.name
-                    logging.warning(f"⚠️ Modèle préféré {preferred_model} non trouvé. Utilisation automatique de {model_name_to_use}.")
-                    break
-        
-        if model_name_to_use:
-            model = genai.GenerativeModel(model_name=model_name_to_use)
-            logging.info(f"✅ IA activée avec le modèle {model_name_to_use}.")
-        else:
-            logging.error("❌ Aucun modèle compatible generate_content disponible.")
-            
+        client = genai.Client(api_key=GEMINI_KEY)
+        logging.info("✅ IA Gemini 2.5 Flash activée.")
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
-
 
 # --- 2. EXTRACTION PROFONDE ---
 
@@ -62,11 +36,10 @@ def extraire_texte_page(url):
         soup = BeautifulSoup(res.text, 'html.parser')
         for s in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']): s.decompose()
         text = soup.get_text(separator=' ')
-        return " ".join(text.split())[:6000]
+        return " ".join(text.split())[:8000] # Capacité augmentée pour 2026
     except: return ""
 
 def chercher_serpapi(cible):
-    # Requête élargie Bordeaux Régénération
     query = f'"{cible}" (Bordeaux OR Métropole) (friche OR "régénération urbaine" OR délibération OR "portage foncier" OR ZAC OR "avis de marché")'
     params = {"engine": "google", "q": query, "api_key": SERPAPI_KEY, "num": 30, "gl": "fr", "hl": "fr", "tbs": "qdr:m6"}
     try:
@@ -74,17 +47,18 @@ def chercher_serpapi(cible):
         return res.get("organic_results", [])
     except: return []
 
-# --- 3. ANALYSE AVEC SECURITE ANTI-ERREUR ---
+# --- 3. ANALYSE STRATÉGIQUE ---
 
 def analyser_ia(item, contenu_web):
-    if not model: return {"score": 0}
+    if not client: return {"score": 0}
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
     
     prompt = f"""RÔLE : Directeur du Développement Urban Agency.
     MISSION : Analyser le potentiel de régénération urbaine à Bordeaux.
+    
     FORMAT JSON STRICT :
     {{
-      "projet": "Nom du site ou projet",
+      "projet": "Nom du site",
       "score": 0,
       "analyse": "Ton raisonnement stratégique sur l'opportunité",
       "action": "Action concrète recommandée"
@@ -92,15 +66,20 @@ def analyser_ia(item, contenu_web):
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        # generate_content est la méthode stable
-        res = model.generate_content(prompt)
-        text_json = res.text.replace('```json', '').replace('```', '').strip()
+        # Appel au modèle 2.5 Flash identifié dans vos logs
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        
+        text_json = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
+        
         return {
             "projet": data.get("projet", item.get("title", "Projet inconnu")),
             "score": int(data.get("score", 0)),
-            "analyse": data.get("analyse") or data.get("analyse_strategique") or "Consulter la source.",
-            "action": data.get("action") or data.get("action_recommandee") or "Surveiller le dossier."
+            "analyse": data.get("analyse", "Analyse indisponible"),
+            "action": data.get("action", "Vérifier la source")
         }
     except Exception as e:
         logging.warning(f"⚠️ Erreur analyse IA : {e}")
@@ -121,16 +100,10 @@ def envoyer_mail(resultats):
             <b style="font-size:17px; color:#2c3e50;">{o['projet']}</b> <span style="font-size:12px;">(Score {o['score']}/3)</span><br>
             <p style="margin:10px 0; font-size:14px; color:#333;"><b>Analyse :</b> {o['analyse']}</p>
             <p style="margin:5px 0; font-size:14px; color:#27ae60;"><b>Action :</b> {o['action']}</p>
-            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">VOIR LA SOURCE →</a>
+            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">LIRE LA SOURCE →</a>
         </div>"""
 
-    full_html = f"""<html><body style="font-family:Arial; background:#f4f4f4; padding:20px;">
-        <div style="max-width:650px; margin:auto;">
-            <img src="{LOGO_URL}" height="45" style="margin-bottom:20px;">
-            <h2 style="color:#2c3e50; border-bottom:2px solid #ddd; padding-bottom:10px;">Radar Stratégique Bordeaux</h2>
-            {blocs}
-        </div>
-    </body></html>"""
+    full_html = f"<html><body style='font-family:Arial; background:#f4f4f4; padding:20px;'><div style='max-width:650px; margin:auto;'><img src='{LOGO_URL}' height='45' style='margin-bottom:20px;'><h2 style='color:#2c3e50;'>Radar Stratégique Bordeaux</h2>{blocs}</div></body></html>"
 
     requests.post("https://api.brevo.com/v3/smtp/email", 
         json={"sender": {"name": "IA Urban Agency", "email": "bertrand@urban-agency.com"}, 
@@ -141,7 +114,7 @@ def envoyer_mail(resultats):
 # --- 5. MAIN ---
 
 def main():
-    logging.info("🚀 Scan final - Version Stabilisée")
+    logging.info("🚀 Scan Stratégique - Version 2026")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
@@ -163,6 +136,7 @@ def main():
             
             if analyse.get('score', 0) >= 1:
                 resultats.append({"url": url, **analyse})
+                logging.info(f"   🎯 Signal capturé : {analyse['projet']}")
             
             hist[url] = {"date": datetime.now().strftime('%Y-%m-%d'), "score": analyse.get('score', 0)}
 
