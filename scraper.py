@@ -18,7 +18,7 @@ GOOGLE_SEARCH_CX = os.environ.get("GOOGLE_SEARCH_CX")
 
 LOGO_URL = "https://urban-agency.com/assets/cp-logo.png"
 HISTORY_FILE = "download_history.json"
-JOURS_RETENTION = 180 # On regarde jusqu'à 6 mois en arrière pour les signaux faibles
+JOURS_RETENTION = 180 # Radar sur 6 mois pour capter l'évolution des ZAC
 
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
@@ -38,7 +38,7 @@ def sauvegarder_historique(historique):
         with open(HISTORY_FILE, 'w') as f: json.dump(historique, f, indent=2)
     except: pass
 
-# --- 3. SESSION & OUTILS ---
+# --- 3. OUTILS EXTRACTION ---
 
 def creer_session():
     session = requests.Session()
@@ -48,154 +48,124 @@ def creer_session():
     })
     return session
 
-def est_recent_pdf(pdf_content):
-    try:
-        with fitz.open(stream=pdf_content, filetype="pdf") as doc:
-            metadata = doc.metadata
-            date_str = metadata.get('creationDate', '') or metadata.get('modDate', '')
-            if date_str.startswith('D:'):
-                d = datetime(int(date_str[2:6]), int(date_str[6:8]), int(date_str[8:10]))
-                return (datetime.now() - d).days <= JOURS_RETENTION
-    except: return True
-    return True
-
 def extraire_contenu_url(session, target_url):
     try:
-        response = session.get(target_url, timeout=10)
+        response = session.get(target_url, timeout=12)
         response.raise_for_status()
         ctype = response.headers.get('Content-Type', '').lower()
         
-        if 'pdf' in ctype or target_url.endswith('.pdf'):
-            if not est_recent_pdf(response.content): return None
+        if 'pdf' in ctype or target_url.lower().endswith('.pdf'):
             with fitz.open(stream=response.content, filetype="pdf") as doc:
                 return "".join([page.get_text() for page in doc[:10]])
         else:
             soup = BeautifulSoup(response.text, 'html.parser')
             for tag in soup(['script', 'style', 'nav', 'footer', 'form', 'header']): tag.decompose()
-            # On cherche le contenu principal pour éviter le bruit du menu
             main = soup.find('main') or soup.find('article') or soup.find('div', class_=re.compile('content|main|article')) or soup.body
             return re.sub(r'\s+', ' ', main.get_text()).strip() if main else ""
     except: return None
 
-# --- 4. DEEP SCANNING (La nouveauté) ---
-
-def recuperer_liens_profonds(session, url_liste, domaine_racine, limite=5):
-    """
-    Visite une page liste (Actualités) et récupère les 5 premiers liens vers des articles.
-    """
-    liens_articles = []
+def recuperer_liens_articles(session, url_liste, racine, limite=5):
+    """Identifie les liens vers les articles individuels sur une page liste"""
     try:
         res = session.get(url_liste, timeout=15)
         soup = BeautifulSoup(res.text, 'html.parser')
+        liens = []
+        vu = set()
         
-        # On cherche tous les liens
-        all_links = soup.find_all('a', href=True)
+        # Filtre pour ne pas cliquer sur n'importe quoi
+        exclude = ['contact', 'mentions', 'facebook', 'linkedin', 'twitter', 'instagram', 'connexion']
         
-        exclude = ['contact', 'mentions', 'plan', 'accès', 'facebook', 'linkedin', 'twitter', 'instagram', 'connexion', 'agenda', 'newsletter']
-        
-        count = 0
-        seen = set()
-        
-        for link in all_links:
-            href = link['href']
-            full_url = urljoin(url_liste, href)
-            
-            # Filtres stricts pour ne garder que les vrais articles
-            if full_url in seen: continue
-            if urlparse(full_url).netloc != urlparse(domaine_racine).netloc: continue # Reste sur le site
-            if any(ex in full_url.lower() for ex in exclude): continue
-            if len(link.get_text(strip=True)) < 5: continue # Ignore les liens vides ou icones
-            
-            # On considère que c'est un article si l'URL est plus longue que la racine + un slug
-            if len(urlparse(full_url).path) > len(urlparse(url_liste).path) + 5:
-                liens_articles.append(full_url)
-                seen.add(full_url)
-                count += 1
-            
-            if count >= limite: break
-            
-    except Exception as e:
-        print(f"Erreur Deep Scan sur {url_liste}: {e}")
-    
-    return liens_articles
+        for a in soup.find_all('a', href=True):
+            url = urljoin(url_liste, a['href'])
+            # On reste sur le même domaine et on évite les doublons/liens inutiles
+            if urlparse(url).netloc == urlparse(racine).netloc and url not in vu:
+                if not any(ex in url.lower() for ex in exclude) and len(url) > len(url_liste) + 3:
+                    liens.append(url)
+                    vu.add(url)
+            if len(liens) >= limite: break
+        return liens
+    except: return []
 
-# --- 5. CERVEAU IA (Spécial Signaux Faibles & Administratifs) ---
+# --- 4. GOOGLE DORKING (LINKEDIN) ---
+
+def scan_google_linkedin(nom_organisme):
+    if not GOOGLE_SEARCH_KEY or not GOOGLE_SEARCH_CX: return []
+    query = f'site:linkedin.com/company/ "{nom_organisme}" ("appel à projets" OR "concours" OR "friche" OR "consultation" OR "lauréat" OR "ZAC" OR "étude urbaine")'
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {'key': GOOGLE_SEARCH_KEY, 'cx': GOOGLE_SEARCH_CX, 'q': query, 'dateRestrict': 'm1', 'num': 3}
+    try:
+        res = requests.get(url, params=params).json()
+        return [{'titre': i['title'], 'url': i['link'], 'snippet': i['snippet']} for i in res.get('items', [])]
+    except: return []
+
+# --- 5. CERVEAU IA (RADAR SIGNAUX FAIBLES) ---
 
 def analyser_ia_urban_agency(texte, source, type_org):
     date_lim = (datetime.now() - timedelta(days=JOURS_RETENTION)).strftime('%d/%m/%Y')
-    
     prompt = f"""
-    RÔLE : Expert Stratégie Urbaine & Développement.
-    CONTEXTE : {source} ({type_org}).
-    DATE LIMITE : {date_lim}.
+    RÔLE : Directeur Dév. Urban Agency.
+    SOURCE : {source} ({type_org}). DATE LIMITE : {date_lim}.
 
-    OBJECTIF : DÉTECTER LES ÉTAPES CLÉS D'UN PROJET URBAIN (Même administratives).
+    OBJECTIF : DÉTECTER LES ÉTAPES CLÉS ET SIGNAUX FAIBLES.
     
-    CE QUE TU DOIS CHERCHER (SIGNAUX D'AFFAIRES) :
-    1. **Le "Top Départ" Administratif** : 
-       - "Création de ZAC", "Bilan de concertation", "Déclaration d'Utilité Publique (DUP)", "Arrêté préfectoral".
-       - C'est CRITIQUE : cela signifie que le projet est validé et que les marchés vont sortir. SCORE = 3.
-    
-    2. **Les Études & Intentions (Signal Faible)** :
-       - "Lancement d'une étude", "Diagnostic en cours", "Désignation de l'aménageur", "Appel à idées".
-       - SCORE = 2.
-       
-    3. **L'Opérationnel (Signal Fort)** :
-       - "Concours", "Appel à projets", "Permis de construire", "Chantier", "Inauguration".
-       - SCORE = 2 ou 3 selon la taille.
+    CRITÈRES DE SCORE :
+    - SCORE 3 (IMMINENT 🔥) : Création de ZAC, Bilan de concertation, Concours d'archi, Marché de MOE lancé, DUP, Budget travaux voté > 5M€.
+    - SCORE 2 (SIGNAL FAIBLE ⚡) : Lancement étude urbaine, Diagnostic, Plan Guide, AMO, Volonté politique affichée de mutation, Préemption stratégique.
+    - SCORE 1 (VEILLE 👁️) : Orientations générales, PLU, Stratégie climat sans site précis.
+    - SCORE 0 (SANS INTÉRÊT) : Menus cantine, RH, vœux, voirie courante, éducation (petites réparations).
 
-    IGNORER (SCORE 0) : Vie de quartier, animations, menus cantine, petites voiries, nominations RH.
-
-    FORMAT JSON STRICT :
+    JSON STRICT :
     {{
-      "titre": "Titre précis de l'action (ex: Création de la ZAC Bègles)",
+      "titre": "Titre explicite de l'opportunité",
       "theme": "Réglementaire / Étude / Opérationnel",
-      "resume": "Explique pourquoi c'est une étape clé pour un architecte/urbaniste.",
-      "chiffres_cles": "Surface / Budget / Logements (si dispo)",
-      "maturite": "Administrative (ZAC/DUP) | Étude | Opérationnelle",
+      "resume": "Pourquoi c'est stratégique pour un archi/urba ? (2 phrases)",
+      "chiffres_cles": "Budget/Surface/Logements (ou 'Non précisé')",
+      "maturite": "Intention | Étude | Opérationnel",
       "score": 0 | 1 | 2 | 3
     }}
 
-    TEXTE :
-    {texte[:15000]}
+    TEXTE : {texte[:15000]}
     """
     try:
         res = model.generate_content(prompt)
         return json.loads(res.text.replace('```json', '').replace('```', '').strip())
     except: return {"score": 0}
 
-# --- 6. FORMATAGE EMAIL ---
+# --- 6. FORMATAGE & ENVOI ---
 
 def generer_html(item, is_new):
-    if item['score'] == 3: border, badge = "#e74c3c", "🔥 IMMINENT"
-    elif item['score'] == 2: border, badge = "#f39c12", "⚡ STRATÉGIQUE"
-    else: border, badge = "#27ae60", "👀 VEILLE"
-
-    font_heading = "'DIN', 'DIN Pro', 'Roboto', Arial, sans-serif"
+    colors = {3: "#e74c3c", 2: "#f39c12", 1: "#27ae60"}
+    border = colors.get(item['score'], "#95a5a6")
+    badge = "🔥 IMMINENT" if item['score'] == 3 else "⚡ SIGNAL FAIBLE" if item['score'] == 2 else "👀 VEILLE"
     
+    icon = "🏗️" if "RESTRUCT" in item.get('theme','').upper() else "📋" if "ÉTUDE" in item.get('theme','').upper() else "🏭"
+    font_h = "'DIN', 'DIN Pro', 'Roboto', Arial, sans-serif"
+
     return f"""
-    <div style="border-left: 4px solid {border}; background: {'white' if is_new else '#f9f9f9'}; padding: 20px; margin-bottom: 20px; font-family:Arial, sans-serif;">
+    <div style="border-left: 4px solid {border}; background: {'#ffffff' if is_new else '#f9f9f9'}; padding: 20px; margin-bottom: 20px; font-family:Arial, sans-serif; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
         <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
-            <div style="color:#7f8c8d; font-size:12px; font-weight:bold; text-transform:uppercase;">{item['nom_source']}</div>
+            <div style="color:#7f8c8d; font-size:11px; font-weight:bold; text-transform:uppercase;">{icon} {item['nom_source']}</div>
             <div style="background:{border}; color:white; padding:2px 6px; border-radius:3px; font-size:10px; font-weight:bold;">{badge}</div>
         </div>
-        <div style="font-family:{font_heading}; font-weight:700; color:#2c3e50; font-size:16px; margin-bottom:8px;">{item['titre']}</div>
+        <div style="font-family:{font_h}; font-weight:700; color:#2c3e50; font-size:16px; margin-bottom:8px;">{item['titre']}</div>
         <div style="font-size:13px; color:#444; line-height:1.4;">{item['resume']}</div>
-        <div style="margin-top:10px; font-size:11px; color:#c0392b; font-weight:bold;">📊 {item.get('chiffres_cles','')}</div>
-        <div style="margin-top:8px; padding-top:8px; border-top:1px solid #eee; text-align:right;">
-             <a href="{item['url']}" style="color:{border}; font-size:11px; text-decoration:none; font-weight:bold;">LIRE L'ACTE / L'ARTICLE →</a>
+        <div style="margin-top:10px; font-size:11px; color:#c0392b; font-weight:bold; background:#fff5f5; padding:4px; display:inline-block;">📊 {item.get('chiffres_cles','')}</div>
+        <div style="margin-top:10px; padding-top:10px; border-top:1px solid #eee; text-align:right;">
+             <a href="{item['url']}" style="color:{border}; font-family:{font_h}; font-size:11px; text-decoration:none; font-weight:bold; text-transform:uppercase;">LIRE LA SOURCE →</a>
         </div>
     </div>
     """
 
 def envoyer_mail(nouveaux, anciens):
-    if not nouveaux and not anciens: return
     url = "https://api.brevo.com/v3/smtp/email"
-    html = "".join([generer_html(x, True) for x in nouveaux]) + "<br><h3>HISTORIQUE</h3>" + "".join([generer_html(x, False) for x in anciens])
+    html = "".join([generer_html(x, True) for x in nouveaux])
+    if anciens:
+        html += '<div style="margin:40px 0 20px 0; border-top:1px dashed #ddd; text-align:center;"><span style="background:white; padding:0 10px; font-size:10px; color:#bdc3c7;">RAPPEL HISTORIQUE</span></div>'
+        html += "".join([generer_html(x, False) for x in anciens])
     
-    body = f"""<html><body style='background:#f4f4f4; padding:20px;'><div style='max-width:600px; margin:auto; background:white; padding:20px;'><div style="text-align:center; padding-bottom:20px;"><img src="{LOGO_URL}" height="40"></div>{html}</div></body></html>"""
+    body = f"""<html><body style='background:#f4f4f4; padding:20px;'><div style='max-width:650px; margin:auto; background:white; padding:20px;'><div style="text-align:center; padding-bottom:20px; border-bottom:1px solid #eee;"><img src="{LOGO_URL}" height="45"></div><div style="padding-top:20px;">{html}</div><div style="background:#2c3e50; color:white; padding:15px; text-align:center; font-size:10px; margin-top:20px;">URBAN AGENCY • RADAR IA</div></div></body></html>"""
     
-    requests.post(url, json={"sender": {"name": "IA Urban Agency", "email": "bertrand@urban-agency.com"}, "to": [{"email": "bertrand@urban-agency.com"}], "subject": f"UA_Veille_{datetime.now().strftime('%d/%m')}: {len(nouveaux)} Détections", "htmlContent": body}, headers={"api-key": BREVO_KEY})
+    requests.post(url, json={"sender": {"name": "IA Urban Agency", "email": "bertrand@urban-agency.com"}, "to": [{"email": "bertrand@urban-agency.com"}], "subject": f"UA_Veille_{datetime.now().strftime('%d/%m')}: {len(nouveaux)} Signaux", "htmlContent": body}, headers={"api-key": BREVO_KEY})
 
 # --- 7. MAIN ---
 
@@ -212,50 +182,49 @@ def main():
         except: continue
     lecteur = csv.DictReader(lignes, delimiter=';' if ';' in lignes[0] else ',')
 
-    print("--- DÉMARRAGE DU DEEP SCAN ---")
+    print("--- DÉMARRAGE RADAR SIGNAUX FAIBLES (DEEP SCAN) ---")
 
     for ligne in lecteur:
         nom = ligne.get("Nom de l'Organisme")
-        if not nom: continue
-        
-        # On prend juste une URL principale (Actu ou Presse) et on va fouiller dedans
-        url_root = ligne.get("URL Actualités / Projets") or ligne.get("URL Communiqués de Presse")
-        if not url_root: continue
+        url_actu = ligne.get("URL Actualités / Projets") or ligne.get("URL Communiqués de Presse")
+        if not nom or not url_actu: continue
 
-        print(f"👉 Analyse Profonde : {nom}...")
+        print(f"👉 Scan Profond : {nom}...")
         
-        # 1. On récupère les liens des articles (Niveau 1)
-        liens_a_scanner = recuperer_liens_profonds(session, url_root, url_root, limite=4)
+        # 1. On va sur la page liste et on récupère les liens vers les détails
+        articles = recuperer_liens_articles(session, url_actu, url_actu, limite=5)
         
-        # 2. On scanne chaque article (Niveau 2)
-        for lien in liens_a_scanner:
+        # 2. On scanne chaque page article trouvée
+        for lien in articles:
             if lien in historique: continue
             
             texte = extraire_contenu_url(session, lien)
-            if texte and len(texte) > 500:
-                print(f"   📖 Lecture : {lien}")
-                data = analyser_ia_urban_agency(texte, nom, "Web Deep Scan")
-                
-                if data.get('score', 0) >= 2: # On ne garde que le significatif
-                    info = {
-                        "url": lien, "date_detection": datetime.now().strftime('%Y-%m-%d'),
-                        "nom_source": nom, "titre": data.get('titre', 'Projet'),
-                        "resume": data.get('resume', ''), "chiffres_cles": data.get('chiffres_cles', ''),
-                        "score": data['score'], "maturite": data.get('maturite', '')
-                    }
+            if texte and len(texte) > 400:
+                data = analyser_ia_urban_agency(texte, nom, "Deep Scan Article")
+                if data.get('score', 0) >= 2:
+                    info = {"url": lien, "date_detection": datetime.now().strftime('%Y-%m-%d'), "nom_source": nom, "titre": data['titre'], "resume": data['resume'], "chiffres_cles": data['chiffres_cles'], "score": data['score'], "theme": data['theme'], "maturite": data['maturite']}
                     leads_new.append(info)
                     historique[lien] = info
-                    print(f"   ✅ DÉTECTION : {info['titre']}")
+                    print(f"   ✅ TROUVÉ : {info['titre']}")
                 else:
-                    # On marque comme vu pour ne pas le rescanner demain
                     historique[lien] = {"date_detection": datetime.now().strftime('%Y-%m-%d'), "score": 0}
 
-    # Sauvegarde et Envoi
-    leads_old = [v for k,v in historique.items() if k not in [x['url'] for x in leads_new] and v['score'] >= 2]
+        # 3. On ajoute LinkedIn pour compléter
+        linkedin_results = scan_google_linkedin(nom)
+        for item in linkedin_results:
+            if item['url'] in historique: continue
+            data = analyser_ia_urban_agency(item['snippet'], nom, "LinkedIn")
+            if data.get('score', 0) >= 2:
+                info = {"url": item['url'], "date_detection": datetime.now().strftime('%Y-%m-%d'), "nom_source": nom, "titre": item['titre'], "resume": data['resume'], "chiffres_cles": "Via LinkedIn", "score": data['score'], "theme": data['theme'], "maturite": data['maturite']}
+                leads_new.append(info)
+                historique[item['url']] = info
+                print(f"   👔 LINKEDIN : {info['titre']}")
+
+    leads_old = [v for k,v in historique.items() if k not in [x['url'] for x in leads_new] and v.get('score', 0) >= 2]
     leads_old.sort(key=lambda x: x['date_detection'], reverse=True)
     
     sauvegarder_historique(historique)
-    envoyer_mail(leads_new, leads_old[:10]) # Top 10 historique
+    envoyer_mail(leads_new, leads_old[:10])
     print("✅ Terminé.")
 
 if __name__ == "__main__":
