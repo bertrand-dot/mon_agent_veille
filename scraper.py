@@ -3,7 +3,7 @@ import requests
 import csv
 import json
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+from google import genai
 from datetime import datetime
 import time
 
@@ -15,8 +15,8 @@ GOOGLE_CX = os.environ.get("GOOGLE_SEARCH_CX")
 LOGO_URL = "https://urban-agency.com/assets/cp-logo.png"
 HISTORY_FILE = "download_history.json"
 
-genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Initialize Gemini client with new package
+client = genai.Client(api_key=GEMINI_KEY)
 
 def load_history():
     """Charge l'historique des opportunités déjà traitées"""
@@ -77,8 +77,11 @@ def analyser_ia_strategique(texte, source):
     
     try:
         time.sleep(1)  # Rate limiting Gemini
-        res = model.generate_content(prompt)
-        clean_text = res.text.replace('```json', '').replace('```', '').strip()
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-exp',
+            contents=prompt
+        )
+        clean_text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(clean_text)
     except Exception as e:
         print(f"⚠️  Erreur analyse IA: {e}")
