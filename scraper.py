@@ -174,7 +174,7 @@ def main():
             # Raisonnement IA
             analyse = analyser_ia_raisonnement(i, contenu)
             
-            if analyse.get('score', 0) >= 1:
+            if analyse.get('score', 0) >= 0:
                 resultats.append({"url": url, **analyse})
                 logging.info(f"   🎯 Signal identifié : {analyse['projet']}")
             
