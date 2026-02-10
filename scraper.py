@@ -21,7 +21,7 @@ if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
         model = genai.GenerativeModel("gemini-pro")
-        logging.info("✅ IA Gemini configurée (gemini-pro)")
+        logging.info("✅ IA Gemini configurée.")
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
 
@@ -30,147 +30,121 @@ if GEMINI_KEY:
 def charger_historique():
     if os.path.exists(HISTORY_FILE):
         try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return {}
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f: return json.load(f)
+        except: return {}
     return {}
 
 def sauvegarder_historique(hist):
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(hist, f, indent=2)
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(hist, f, indent=2)
 
 def chercher_serpapi(nom_organisme):
-    """Recherche étendue via SerpApi"""
-    if not SERPAPI_KEY:
-        logging.warning("⚠️ Clé SerpApi manquante.")
-        return []
-    
-    # Requête orientée 'Marchés Publics et Urbanisme'
-    query = f'"{nom_organisme}" (délibération OR friche OR concours OR "avis de marché" OR ZAC)'
+    """Recherche sur 6 mois avec 20 résultats"""
+    if not SERPAPI_KEY: return []
+    query = f'"{nom_organisme}" (délibération OR friche OR concours OR aménagement OR ZAC OR "avis de marché")'
     url = "https://serpapi.com/search"
     params = {
         "engine": "google",
         "q": query,
         "api_key": SERPAPI_KEY,
-        "num": 20, # AUGMENTÉ : On passe à 20 résultats
+        "num": 20, # Volume augmenté
         "gl": "fr",
         "hl": "fr",
-        "tbs": "qdr:m6" # 6 derniers mois pour capter les signaux récents
+        "tbs": "qdr:m6" # ÉLARGISSEMENT À 6 MOIS
     }
-    
     try:
         res = requests.get(url, params=params, timeout=20).json()
-        if "error" in res:
-            logging.error(f"❌ Erreur SerpApi: {res['error']}")
-            return []
         return res.get("organic_results", [])
-    except Exception as e:
-        logging.error(f"❌ Erreur réseau SerpApi: {e}")
-        return []
+    except: return []
 
 def analyser_ia(item):
-    """Analyse stratégique avec priorité aux annonces légales"""
+    """Analyse stratégique avec résumé 'Angle Opportunité'"""
     texte = f"Titre: {item.get('title')}\nSnippet: {item.get('snippet')}"
     
-    prompt = f"""RÔLE : Directeur du Développement Urban Agency.
-    TACHE : Analyser ce signal pour identifier une opportunité de concours ou de projet urbain.
+    prompt = f"""RÔLE : Directeur du Développement pour Urban Agency (Architecture).
+    MISSION : Analyser cet extrait pour détecter une opportunité de projet.
     
     GRILLE DE SCORE :
-    - SCORE 3 (HAUTE PRIORITÉ) : Annonce légale, Avis de marché, Lancement de concours, Création de ZAC.
-    - SCORE 2 (SIGNAL FAIBLE) : Étude urbaine, Reconversion de friche, Intention de projet, Délibération.
-    - SCORE 1 (VEILLE) : Article de presse urbanisme, information de contexte.
-    - SCORE 0 (IGNORER) : RH, Administration pure, Annuaire.
+    - 3 : Annonce légale, Avis de marché, Lancement de concours, ZAC.
+    - 2 : Étude de faisabilité, mutation de friche, intention de projet urbain.
+    - 1 : Veille générale, information territoriale.
+    - 0 : Ignorer (RH, archives, annuaire).
     
-    ATTENTION : Si le texte mentionne une 'Annonce Légale' ou un 'Marché Public', attribue un score de 3.
+    CONSIGNES DE RÉSUMÉ :
+    Rédige un résumé d'une phrase expliquant l'ANGLE OPPORTUNITÉ (ex: "Potentiel concours de maîtrise d'œuvre suite à l'annonce de dépollution de la friche").
     
-    RETOURNE JSON STRICT : {{"titre": "...", "score": 0, "resume": "..."}}
+    RETOURNE UN JSON STRICT :
+    {{
+      "titre": "Titre court",
+      "score": 0,
+      "resume": "Résumé stratégique"
+    }}
+    
     TEXTE : {texte}"""
     
     try:
         res = model.generate_content(prompt)
-        return json.loads(res.text.replace('```json', '').replace('```', '').strip())
+        json_text = res.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(json_text)
     except:
-        return {"score": 0, "titre": item.get('title'), "resume": "Erreur analyse"}
+        return {"score": 0, "titre": item.get('title'), "resume": "Analyse simplifiée"}
 
-def envoyer_mail(opportunites, nom_teste):
+def envoyer_mail(resultats, nom_teste):
     date_str = datetime.now().strftime('%d/%m/%Y')
-    
-    if not opportunites:
-        subject = f"🔍 Veille UA {date_str} : RAS"
-        html = f"<p>Le radar a scanné 20 résultats pour <b>{nom_teste}</b>. Aucun nouveau signal pertinent détecté.</p>"
-    else:
-        # Tri : les plus hauts scores en premier
-        opportunites.sort(key=lambda x: x['score'], reverse=True)
-        subject = f"🎯 Veille UA {date_str} : {len(opportunites)} opportunités détectées"
-        
-        blocs = ""
-        for o in opportunites:
-            color = "#e74c3c" if o['score'] == 3 else "#3498db" if o['score'] == 2 else "#95a5a6"
-            blocs += f"""
-            <li style='margin-bottom:20px; list-style:none; border-left:4px solid {color}; padding-left:15px;'>
-                <b style='font-size:16px;'>{o['titre']}</b> <span style='color:{color}; font-size:12px;'>(Score {o['score']}/3)</span><br>
-                <i style='font-size:13px; color:#555;'>{o['resume']}</i><br>
-                <a href='{o['url']}' style='color:{color}; font-size:12px; font-weight:bold;'>VOIR LA SOURCE →</a>
-            </li>"""
-        html = f"<h3>Signaux identifiés (Top 20 résultats Google) :</h3><ul>{blocs}</ul>"
+    if not resultats: return
 
-    full_html = f"""<html><body style="font-family:Arial; padding:20px; background:#f9f9f9;">
-        <div style="max-width:600px; margin:auto; background:white; padding:20px; border-radius:8px; border:1px solid #eee;">
+    subject = f"🎯 Radar UA {date_str} : {len(resultats)} Signaux (6 derniers mois)"
+    
+    blocs = ""
+    for o in sorted(resultats, key=lambda x: x['score'], reverse=True):
+        color = "#e74c3c" if o['score'] == 3 else "#3498db" if o['score'] == 2 else "#95a5a6"
+        blocs += f"""
+        <div style="border-left:5px solid {color}; padding:15px; margin-bottom:15px; background:#fff; border-radius:4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+            <b style="font-size:16px; color:#2c3e50;">{o['titre']}</b> <span style="color:{color}; font-size:12px;">(Score {o['score']}/3)</span><br>
+            <p style="font-size:14px; color:#333; margin:10px 0;"><b>Opportunité :</b> {o['resume']}</p>
+            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">VOIR LA SOURCE →</a>
+        </div>"""
+
+    full_html = f"""<html><body style="background:#f4f4f4; padding:20px; font-family:Arial;">
+        <div style="max-width:600px; margin:auto;">
             <img src="{LOGO_URL}" height="40"><br>
-            <h2 style="color:#2c3e50; border-bottom:1px solid #eee; padding-bottom:10px;">Radar Stratégique Urban Agency</h2>
-            {html}
+            <h2 style="color:#2c3e50; border-bottom:2px solid #eee; padding-bottom:10px;">Radar Stratégique Urban Agency</h2>
+            {blocs}
         </div>
     </body></html>"""
 
     requests.post("https://api.brevo.com/v3/smtp/email", 
-        json={"sender": {"name": "Radar UA", "email": "bertrand@urban-agency.com"}, 
+        json={"sender": {"name": "IA Urban Agency", "email": "bertrand@urban-agency.com"}, 
               "to": [{"email": "bertrand@urban-agency.com"}], 
               "subject": subject, "htmlContent": full_html}, 
         headers={"api-key": BREVO_KEY})
 
-# --- 3. MAIN ---
-
 def main():
-    logging.info("🚀 Démarrage du scan haute-performance (20 résultats)")
+    logging.info("🚀 Scan Intensif (20 résultats / 6 mois)")
     hist = charger_historique()
     resultats = []
-    dernier_nom = "Inconnu"
 
-    if not os.path.exists("cibles.csv"):
-        logging.error("❌ Fichier cibles.csv introuvable.")
-        return
+    if not os.path.exists("cibles.csv"): return
 
     with open("cibles.csv", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             nom = row.get("Nom de l'Organisme")
             if not nom: continue
-            dernier_nom = nom
             
-            logging.info(f"🔎 Analyse intensive : {nom}")
             items = chercher_serpapi(nom)
-            
             for i in items:
                 url = i.get('link')
                 if not url or url in hist: continue
                 
                 analyse = analyser_ia(i)
-                # On mémorise dans l'historique
-                hist[url] = {
-                    "date": datetime.now().strftime('%Y-%m-%d'), 
-                    "score": analyse.get('score', 0),
-                    "source": nom
-                }
-
-                # On n'ajoute au mail que si le score est significatif (1, 2 ou 3)
+                # On ne garde que ce qui est utile (score 1, 2, 3)
                 if analyse.get('score', 0) >= 1:
                     resultats.append({"url": url, "nom_source": nom, **analyse})
-                    logging.info(f"   🔥 Opportunité détectée : {analyse['titre']} (Score {analyse['score']})")
+                
+                hist[url] = {"date": datetime.now().strftime('%Y-%m-%d'), "score": analyse.get('score', 0)}
 
-    envoyer_mail(resultats, dernier_nom)
+    envoyer_mail(resultats, "Multi-Cibles")
     sauvegarder_historique(hist)
-    logging.info("🏁 Fin de mission.")
+    logging.info("🏁 Terminé")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
