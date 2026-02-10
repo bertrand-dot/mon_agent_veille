@@ -7,7 +7,6 @@ import google.generativeai as genai
 from datetime import datetime
 
 # --- 1. CONFIGURATION ---
-
 GEMINI_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
 BREVO_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
 SERPAPI_KEY = (os.environ.get("SERPAPI_KEY") or "").strip()
@@ -17,9 +16,7 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# --- IA CONFIGURATION ---
-
-model = None
+# Configuration IA
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
@@ -28,7 +25,7 @@ if GEMINI_KEY:
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
 
-# --- 2. UTILITAIRES ---
+# --- 2. FONCTIONS TECHNIQUES ---
 
 def charger_historique():
     if os.path.exists(HISTORY_FILE):
@@ -41,120 +38,80 @@ def charger_historique():
 
 def sauvegarder_historique(hist):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(hist, f, indent=2, ensure_ascii=False)
-
-# --- 3. RECHERCHE WEB (SerpAPI) ---
+        json.dump(hist, f, indent=2)
 
 def chercher_serpapi(nom_organisme):
-    """Recherche Google réelle via SerpAPI (veille / signaux faibles)"""
-
+    """Recherche via SerpApi (moteur Google)"""
     if not SERPAPI_KEY:
-        logging.warning("⚠️ Clé SERPAPI manquante.")
+        logging.warning("⚠️ Clé SerpApi manquante.")
         return []
-
-    query = f'"{nom_organisme}" (délibération OR friche OR concours OR reconversion OR ZAC)'
-
+    
+    query = f'"{nom_organisme}" (délibération OR friche OR concours OR aménagement OR ZAC)'
+    url = "https://serpapi.com/search"
     params = {
         "engine": "google",
         "q": query,
-        "hl": "fr",
-        "gl": "fr",
-        "num": 5,
-        "tbs": "qdr:m",  # last month
         "api_key": SERPAPI_KEY,
+        "num": 10,
+        "gl": "fr",
+        "hl": "fr",
+        "tbs": "qdr:m6" # Résultats des 6 derniers mois
     }
-
+    
     try:
-        res = requests.get("https://serpapi.com/search", params=params, timeout=20)
-        data = res.json()
-
-        if "error" in data:
-            logging.error(f"❌ ERREUR SERPAPI: {data['error']}")
+        res = requests.get(url, params=params, timeout=15).json()
+        if "error" in res:
+            logging.error(f"❌ Erreur SerpApi: {res['error']}")
             return []
-
-        return data.get("organic_results", [])
-
+        return res.get("organic_results", [])
     except Exception as e:
-        logging.error(f"❌ Erreur réseau SerpAPI: {e}")
+        logging.error(f"❌ Erreur réseau SerpApi: {e}")
         return []
 
-# --- 4. ANALYSE IA ---
-
 def analyser_ia(item):
-    """Analyse de l'opportunité par l'IA"""
-
-    if not model:
-        return {"score": 0, "titre": item.get("title"), "resume": "IA indisponible"}
-
-    texte = f"Titre: {item.get('title')}\nExtrait: {item.get('snippet')}"
-
-    prompt = f"""
-Analyse ce signal pour un cabinet d'architecture.
-
-Score 3 : Concours lancé, délibération officielle, appel d'offres
-Score 2 : Étude préalable, friche identifiée, intention publique
-Score 0 : Bruit, information non exploitable
-
-Retourne STRICTEMENT un JSON valide :
-{{"titre": "...", "score": 0, "resume": "..."}}
-
-Texte :
-{texte}
-"""
-
+    """Analyse stratégique du résultat par l'IA"""
+    texte = f"Titre: {item.get('title')}\nSnippet: {item.get('snippet')}"
+    prompt = f"""Analyse ce signal pour un cabinet d'architecture. 
+    Score 3: Projet concret, concours, ZAC, reconversion.
+    Score 2: Signal faible, étude urbaine, intention politique.
+    Score 0: Bruit, RH, information inutile.
+    Retourne JSON: {{"titre": "...", "score": 0, "resume": "..."}}
+    Texte: {texte}"""
+    
     try:
         res = model.generate_content(prompt)
-        clean = res.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean)
-    except Exception as e:
-        logging.error(f"❌ Erreur analyse IA: {e}")
-        return {"score": 0, "titre": item.get("title"), "resume": "Erreur analyse IA"}
+        return json.loads(res.text.replace('```json', '').replace('```', '').strip())
+    except:
+        return {"score": 0, "titre": item.get('title'), "resume": "Erreur analyse"}
 
-# --- 5. EMAIL ---
-
-def envoyer_mail(opportunites, dernier_nom):
-    date_str = datetime.now().strftime("%d/%m/%Y")
-
+def envoyer_mail(opportunites, nom_teste):
+    date_str = datetime.now().strftime('%d/%m/%Y')
+    
     if not opportunites:
-        subject = f"🔍 Veille UA {date_str} : Aucun nouveau signal"
-        html = f"<p>Aucun signal détecté aujourd’hui pour <b>{dernier_nom}</b>.</p>"
+        subject = f"🔍 Veille UA {date_str} : Aucun signal"
+        html = f"<p>Le radar a scanné <b>{nom_teste}</b> mais aucun nouveau signal n'a été détecté.</p>"
     else:
-        subject = f"🎯 Veille UA {date_str} : {len(opportunites)} opportunités"
-        blocs = "".join(
-            f"<li><b>{o['titre']}</b> (Score {o['score']})<br>"
-            f"<a href='{o['url']}'>Lien source</a></li>"
-            for o in opportunites
-        )
-        html = f"<h3>Nouveaux signaux détectés :</h3><ul>{blocs}</ul>"
+        subject = f"🎯 Veille UA {date_str} : {len(opportunites)} signaux détectés"
+        blocs = "".join([f"<li style='margin-bottom:15px;'><b>{o['titre']}</b> (Score {o['score']}/3)<br><small>{o['resume']}</small><br><a href='{o['url']}'>Lien source</a></li>" for o in opportunites])
+        html = f"<h3>Signaux identifiés :</h3><ul>{blocs}</ul>"
 
-    full_html = f"""
-    <html>
-    <body style="font-family:Arial; color:#333; padding:20px;">
+    full_html = f"""<html><body style="font-family:Arial; padding:20px;">
         <img src="{LOGO_URL}" height="40"><br>
-        <h2>Rapport Radar Urban Agency</h2>
+        <h2 style="color:#2c3e50;">Rapport Radar Urban Agency</h2>
         {html}
-        <hr>
-        <p style="font-size:10px;color:#999;">Rapport généré automatiquement.</p>
-    </body>
-    </html>
-    """
+        <hr><p style="font-size:10px; color:#999;">Généré avec SerpApi & Gemini.</p>
+    </body></html>"""
 
-    requests.post(
-        "https://api.brevo.com/v3/smtp/email",
-        headers={"api-key": BREVO_KEY},
-        json={
-            "sender": {"name": "Radar UA", "email": "bertrand@urban-agency.com"},
-            "to": [{"email": "bertrand@urban-agency.com"}],
-            "subject": subject,
-            "htmlContent": full_html,
-        },
-        timeout=20,
-    )
+    requests.post("https://api.brevo.com/v3/smtp/email", 
+        json={"sender": {"name": "Radar UA", "email": "bertrand@urban-agency.com"}, 
+              "to": [{"email": "bertrand@urban-agency.com"}], 
+              "subject": subject, "htmlContent": full_html}, 
+        headers={"api-key": BREVO_KEY})
 
-# --- 6. MAIN ---
+# --- 3. MAIN ---
 
 def main():
-    logging.info("🚀 Démarrage du scan")
+    logging.info("🚀 Démarrage du scan SerpApi")
     hist = charger_historique()
     resultats = []
     dernier_nom = "Inconnu"
@@ -167,23 +124,30 @@ def main():
         reader = csv.DictReader(f)
         for row in reader:
             nom = row.get("Nom de l'Organisme")
-            if not nom:
-                continue
-
+            if not nom: continue
             dernier_nom = nom
-            logging.info(f"🔎 Recherche web : {nom}")
-
+            
+            logging.info(f"🔎 Recherche SerpApi : {nom}")
             items = chercher_serpapi(nom)
-
-            for item in items:
-                url = item.get("link")
-                if not url or url in hist:
-                    continue
-
-                analyse = analyser_ia(item)
-                if analyse.get("score", 0) >= 1:
-                    resultats.append({"url": url, **analyse})
-                    logging.info(f"🔥 Signal détecté : {analyse['titre']}")
-
+            
+            for i in items:
+                url = i.get('link')
+                if not url or url in hist: continue
+                
+                analyse = analyser_ia(i)
+                if analyse.get('score', 0) >= 1:
+                    resultats.append({"url": url, "nom_source": nom, **analyse})
+                
+                # CORRECTION SYNTAXE ICI : On ferme bien le dictionnaire
                 hist[url] = {
-                    "date": datetime.now().st
+                    "date": datetime.now().strftime('%Y-%m-%d'), 
+                    "score": analyse.get('score', 0),
+                    "source": nom
+                }
+
+    envoyer_mail(resultats, dernier_nom)
+    sauvegarder_historique(hist)
+    logging.info("🏁 Fin de mission.")
+
+if __name__ == "__main__":
+    main()
