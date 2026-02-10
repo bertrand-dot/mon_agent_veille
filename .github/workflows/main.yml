@@ -1,11 +1,10 @@
 name: Radar Urban Agency
 
 on:
-  workflow_dispatch:  # Permet de lancer manuellement
+  workflow_dispatch:
   schedule:
-    - cron: '0 8 * * *'  # Lance tous les jours à 8h00 UTC
+    - cron: '0 8 * * *'
 
-# Permet au robot d'écrire sur le dépôt
 permissions:
   contents: write
 
@@ -17,7 +16,7 @@ jobs:
     - name: Récupérer le code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Important: récupère tout l'historique
+        fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Installer Python
@@ -42,8 +41,7 @@ jobs:
       run: |
         git config --global user.name "Urban Agency Bot"
         git config --global user.email "bot@urban-agency.com"
-        git add download_history.json
-        # On vérifie s'il y a des changements
+        git add -A
         if git diff --staged --quiet; then
           echo "Rien à sauvegarder."
         else
