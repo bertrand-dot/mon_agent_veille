@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: '0 8 * * *'  # Lance tous les jours à 8h00 UTC
 
-# C'EST ICI QUE SE JOUE L'ERREUR 128 :
+# Permet au robot d'écrire sur le dépôt
 permissions:
   contents: write
 
@@ -35,10 +35,16 @@ jobs:
         GOOGLE_SEARCH_CX: ${{ secrets.GOOGLE_SEARCH_CX }}
       run: python scraper.py
 
-    - name: Sauvegarder l'historique (Git Push)
+    - name: Sauvegarder l'historique (Force Auth)
       run: |
         git config --global user.name "Urban Agency Bot"
         git config --global user.email "bot@urban-agency.com"
         git add download_history.json
-        # On vérifie s'il y a des changements avant de commit pour éviter une erreur
-        git diff --quiet && git diff --staged --quiet || (git commit -m "Mise à jour historique [skip ci]" && git push)
+        # On vérifie s'il y a des changements
+        if git diff --staged --quiet; then
+          echo "Rien à sauvegarder."
+        else
+          git commit -m "Mise à jour historique [skip ci]"
+          # C'EST ICI QUE LA MAGIE OPÈRE POUR L'ERREUR 128 :
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+        fi
