@@ -1,214 +1,181 @@
 import os
 import requests
 import csv
+import re
 import json
-from bs4 import BeautifulSoup
-from google import genai
+import logging
+import google.generativeai as genai
+from urllib.parse import urljoin, urlparse
 from datetime import datetime
-import time
 
 # --- CONFIGURATION ---
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-BREVO_KEY = os.environ.get("BREVO_API_KEY")
-GOOGLE_KEY = os.environ.get("GOOGLE_SEARCH_KEY")
-GOOGLE_CX = os.environ.get("GOOGLE_SEARCH_CX")
+# On récupère les clés avec une sécurité (strip) pour éviter les espaces invisibles
+GEMINI_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
+BREVO_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
+GOOGLE_KEY = (os.environ.get("GOOGLE_SEARCH_KEY") or "").strip()
+GOOGLE_CX = (os.environ.get("GOOGLE_SEARCH_CX") or "").strip()
+
 LOGO_URL = "https://urban-agency.com/assets/cp-logo.png"
 HISTORY_FILE = "download_history.json"
 
-# Initialize Gemini client with new package
-client = genai.Client(api_key=GEMINI_KEY)
+# Configuration des Logs
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def load_history():
-    """Charge l'historique des opportunités déjà traitées"""
+# Configuration IA (On passe sur le modèle STABLE)
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    # On utilise gemini-pro qui est le standard actuel pour éviter l'erreur 404
+    model = genai.GenerativeModel('gemini-pro')
+else:
+    logging.error("⛔ CLÉ GEMINI MANQUANTE !")
+
+def charger_historique():
     if os.path.exists(HISTORY_FILE):
-        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"processed_urls": [], "last_run": None}
+        try:
+            with open(HISTORY_FILE, 'r') as f: return json.load(f)
+        except: return {}
+    return {}
 
-def save_history(history):
-    """Sauvegarde l'historique"""
-    history["last_run"] = datetime.now().isoformat()
-    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(history, f, indent=2, ensure_ascii=False)
+def sauvegarder_historique(hist):
+    with open(HISTORY_FILE, 'w') as f: json.dump(hist, f, indent=2)
 
 def chercher_signaux_google(nom_organisme):
-    """Effectue une recherche ciblée sur les signaux faibles"""
-    if not GOOGLE_KEY or not GOOGLE_CX: 
+    """Recherche Google de haute précision"""
+    if not GOOGLE_KEY or not GOOGLE_CX:
+        logging.warning("⚠️  Clés Google Search manquantes ou vides.")
         return []
     
-    query = f'site:*.fr "{nom_organisme}" (délibération OR "friche industrielle" OR "appel à projets" OR "concours d\'architecture" OR "reconversion")'
+    # On cherche large : Friches, ZAC, Concours, Délibérations
+    query = f'site:*.fr "{nom_organisme}" ("friche" OR "concours" OR "ZAC" OR "délibération" OR "appel à projets")'
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
         'key': GOOGLE_KEY, 
         'cx': GOOGLE_CX, 
         'q': query, 
-        'dateRestrict': 'm2', 
-        'num': 5
+        'dateRestrict': 'm3', # 3 derniers mois
+        'num': 4 # Top 4 résultats
     }
     
     try:
-        time.sleep(1)  # Rate limiting
-        res = requests.get(url, params=params, timeout=10).json()
-        return [
-            {
-                'titre': i['title'], 
-                'url': i['link'], 
-                'snippet': i['snippet']
-            } 
-            for i in res.get('items', [])
-        ]
-    except Exception as e:
-        print(f"⚠️  Erreur recherche Google: {e}")
+        res = requests.get(url, params=params)
+        data = res.json()
+        
+        # Petit debug pour voir si Google répond
+        if 'error' in data:
+            logging.error(f"Erreur Google API: {data['error']['message']}")
+            return []
+            
+        items = data.get('items', [])
+        logging.info(f"   → {len(items)} résultats trouvés via Google.")
+        return [{'titre': i.get('title'), 'url': i.get('link'), 'snippet': i.get('snippet')} for i in items]
+    except Exception as e: 
+        logging.error(f"Erreur connexion Google: {e}")
         return []
 
 def analyser_ia_strategique(texte, source):
-    """Analyse IA pour scorer les opportunités"""
-    prompt = f"""RÔLE : Directeur du Développement Urban Agency.
-    ÉVALUE le potentiel de ce texte pour gagner un concours ou une mission de reconversion urbaine.
+    """Cerveau IA pour détecter les opportunités"""
+    prompt = f"""RÔLE: Expert Développement Foncier.
+    ANALYSE ce texte pour identifier une opportunité d'affaires (Archi/Urba).
     
-    POINTS CLÉS :
-    - Score 3 : Projet concret mentionné, friche identifiée, concours imminent, délibération de budget.
-    - Score 2 : Étude de faisabilité lancée, signal faible de mutation urbaine.
-    - Score 1 : Veille institutionnelle simple.
-    
-    RETOURNE JSON : {{"titre": "...", "resume": "Explique l'opportunité commerciale", "score": 0-3}}
-    SOURCE : {source}
-    TEXTE : {texte[:12000]}"""
-    
-    try:
-        time.sleep(1)  # Rate limiting Gemini
-        response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=prompt
-        )
-        clean_text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(clean_text)
-    except Exception as e:
-        print(f"⚠️  Erreur analyse IA: {e}")
-        return {"titre": "Erreur analyse", "resume": "", "score": 0}
+    GRILLE DE SCORE:
+    - 3 (HOT): Concours, Appel d'offre, Création ZAC, Achat Foncier, Délibération budget travaux.
+    - 2 (WARM): Étude faisabilité, Diagnostic, Concertation publique, Vente friche.
+    - 1 (COLD): Veille générique, nomination.
+    - 0 (NULL): Bruit, menu, contact.
 
-def fetch_page_content(url, session):
-    """Récupère le contenu d'une page web"""
+    FORMAT JSON STRICT:
+    {{"titre": "Titre court", "resume": "Résumé en 1 phrase", "score": 0}}
+    
+    SOURCE: {source}
+    TEXTE: {texte[:8000]}""" # On limite la taille pour éviter les erreurs
+    
     try:
-        response = session.get(url, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # Extrait le texte principal
-        for script in soup(["script", "style"]):
-            script.decompose()
-        return soup.get_text()[:12000]
+        res = model.generate_content(prompt)
+        return json.loads(res.text.replace('```json', '').replace('```', '').strip())
     except Exception as e:
-        print(f"⚠️  Erreur récupération {url}: {e}")
-        return ""
+        logging.error(f"⚠️  Erreur IA sur {source}: {e}")
+        return {"score": 0}
 
 def envoyer_mail_strategique(opportunites):
-    """Envoie l'email récapitulatif"""
-    if not opportunites or not BREVO_KEY: 
+    if not opportunites: 
+        logging.info("📭 Pas d'opportunités à envoyer.")
         return
     
-    corps = ""
+    html_content = ""
     for op in opportunites:
         color = "#e74c3c" if op['score'] == 3 else "#3498db"
-        corps += f"""<div style="border-left:5px solid {color}; padding:15px; margin-bottom:20px; background:#fff;">
-            <b style="font-size:16px; color:#2c3e50;">{op['titre']}</b><br>
-            <i style="color:#7f8c8d;">Source : {op['nom_source']}</i>
-            <p style="font-size:14px; color:#333;">{op['resume']}</p>
-            <a href="{op['url']}" style="color:{color}; font-weight:bold;">VOIR L'OPPORTUNITÉ →</a>
+        html_content += f"""
+        <div style="border-left:5px solid {color}; padding:15px; margin-bottom:20px; background:#fff; box-shadow:0 2px 4px rgba(0,0,0,0.1);">
+            <div style="color:#7f8c8d; font-size:11px; text-transform:uppercase;">{op['nom_source']} • SCORE {op['score']}/3</div>
+            <b style="font-size:16px; color:#2c3e50;">{op['titre']}</b>
+            <p style="font-size:14px; color:#333; margin:5px 0;">{op['resume']}</p>
+            <a href="{op['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">VOIR LA SOURCE →</a>
         </div>"""
 
-    html = f"""<html><body style="background:#f4f4f4; padding:20px; font-family:Arial;">
-        <div style="max-width:600px; margin:auto; background:white; padding:20px; border-radius:10px;">
-            <img src="{LOGO_URL}" height="40"><br>
-            <h2 style="color:#2c3e50; border-bottom:2px solid #eee; padding-bottom:10px;">
-                RADAR OPPORTUNITÉS HAUTE-PRÉCISION
-            </h2>
-            {corps}
+    body = f"""<html><body style="background:#f4f4f4; padding:20px; font-family:Arial, sans-serif;">
+        <div style="max-width:600px; margin:auto; background:white; padding:30px; border-radius:10px;">
+            <img src="{LOGO_URL}" height="50" style="margin-bottom:20px;">
+            <h2 style="color:#2c3e50; border-bottom:1px solid #eee; padding-bottom:10px; margin-top:0;">RADAR STRATÉGIQUE</h2>
+            {html_content}
         </div>
     </body></html>"""
 
-    try:
-        response = requests.post(
-            "https://api.brevo.com/v3/smtp/email",
-            json={
-                "sender": {"name": "Radar Urban Agency", "email": "bertrand@urban-agency.com"},
-                "to": [{"email": "bertrand@urban-agency.com"}],
-                "subject": f"🎯 {len(opportunites)} Signaux de Marché Détectés",
-                "htmlContent": html
-            },
-            headers={"api-key": BREVO_KEY},
-            timeout=10
-        )
-        print(f"✅ Email envoyé (status: {response.status_code})")
-    except Exception as e:
-        print(f"⚠️  Erreur envoi email: {e}")
+    response = requests.post("https://api.brevo.com/v3/smtp/email", 
+        json={"sender": {"name": "Radar Urban Agency", "email": "bertrand@urban-agency.com"}, 
+              "to": [{"email": "bertrand@urban-agency.com"}], 
+              "subject": f"🎯 {len(opportunites)} Nouveaux Signaux Détectés", "htmlContent": body}, 
+        headers={"api-key": BREVO_KEY})
+    
+    if response.status_code in [200, 201]:
+        logging.info("✅ Email envoyé avec succès.")
+    else:
+        logging.error(f"❌ Erreur envoi email: {response.text}")
 
 def main():
-    if not os.path.exists('cibles.csv'):
-        print("❌ Fichier cibles.csv introuvable")
+    if not os.path.exists('cibles.csv'): 
+        logging.error("❌ Fichier cibles.csv introuvable.")
         return
-    
-    # Charger l'historique
-    history = load_history()
-    print(f"📁 Historique chargé: {len(history['processed_urls'])} URLs déjà traitées")
-    
-    session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0 (compatible; UrbanAgencyBot/1.0)'})
-    resultats = []
+        
+    logging.info("🚀 Démarrage du Radar...")
+    hist = charger_historique()
+    opportunites = []
 
-    with open('cibles.csv', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            nom = row.get("Nom de l'Organisme")
-            if not nom: 
-                continue
-            
-            print(f"\n🔍 Intelligence sur {nom}...")
-            
-            # Méthode 1 : Recherche Google (Signaux Faibles)
-            signaux = chercher_signaux_google(nom)
-            print(f"   → {len(signaux)} signaux Google trouvés")
-            
-            for s in signaux:
-                # Éviter les doublons
-                if s['url'] in history['processed_urls']:
-                    print(f"   ⏭️  Déjà traité: {s['url'][:50]}...")
-                    continue
-                
-                res = analyser_ia_strategique(s['snippet'] + " " + s['titre'], nom)
-                if res['score'] >= 2:
-                    resultats.append({
-                        "url": s['url'],
-                        "nom_source": nom,
-                        **res
-                    })
-                    history['processed_urls'].append(s['url'])
-                    print(f"   ✨ Opportunité détectée (score {res['score']}): {res['titre'][:50]}...")
-            
-            # Méthode 2 : Scan Direct (si URL fournie)
-            url_direct = row.get("URL Actualités / Projets")
-            if url_direct and url_direct not in history['processed_urls']:
-                print(f"   → Scan direct de {url_direct[:50]}...")
-                contenu = fetch_page_content(url_direct, session)
-                if contenu:
-                    res_direct = analyser_ia_strategique(contenu, nom)
-                    if res_direct['score'] >= 2:
-                        resultats.append({
-                            "url": url_direct,
-                            "nom_source": nom,
-                            **res_direct
-                        })
-                        history['processed_urls'].append(url_direct)
-                        print(f"   ✨ Opportunité détectée (score {res_direct['score']})")
+    # Lecture sécurisée du CSV
+    lignes = []
+    for enc in ['utf-8', 'latin-1']:
+        try:
+            with open('cibles.csv', encoding=enc) as f: lignes = f.readlines(); break
+        except: continue
+        
+    if not lignes: return
+    sep = ';' if ';' in lignes[0] else ','
+    reader = csv.DictReader(lignes, delimiter=sep)
 
-    # Sauvegarder l'historique
-    save_history(history)
-    print(f"\n💾 Historique sauvegardé: {len(history['processed_urls'])} URLs totales")
-    
-    # Envoyer le rapport
-    if resultats:
-        envoyer_mail_strategique(resultats)
-        print(f"✅ {len(resultats)} opportunités envoyées par email")
-    else:
-        print("ℹ️  Aucune nouvelle opportunité détectée")
+    for row in reader:
+        nom = row.get("Nom de l'Organisme")
+        if not nom: continue
+        
+        logging.info(f"🔎 Analyse de : {nom}")
+        
+        # 1. Recherche Google (Signaux Faibles)
+        google_results = chercher_signaux_google(nom)
+        for res in google_results:
+            if res['url'] in hist: continue # Déjà vu
+            
+            # Analyse IA du snippet Google (rapide et efficace)
+            analyse = analyser_ia_strategique(res['snippet'] + " " + res['titre'], nom)
+            
+            if analyse['score'] >= 2: # On ne garde que le pertinent
+                item = {"url": res['url'], "nom_source": nom, **analyse}
+                opportunites.append(item)
+                logging.info(f"   🔥 Opportunité détectée : {analyse['titre']}")
+            
+            # On mémorise
+            hist[res['url']] = {"date": datetime.now().strftime('%Y-%m-%d'), "score": analyse['score']}
+
+    envoyer_mail_strategique(opportunites)
+    sauvegarder_historique(hist)
+    logging.info("🏁 Mission terminée.")
 
 if __name__ == "__main__":
     main()
