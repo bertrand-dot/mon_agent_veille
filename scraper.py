@@ -17,14 +17,24 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# --- IA CONFIGURATION (NOM CANONIQUE CORRIGÉ) ---
+# --- IA CONFIGURATION (FIX STABLE) ---
 model = None
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        # "models/gemini-1.5-flash" est le nom universel accepté
-        model = genai.GenerativeModel("models/gemini-1.5-flash")
-        logging.info("✅ IA Gemini 1.5 Flash activée.")
+        
+        # Liste les modèles disponibles pour vérifier le nom exact
+        available_models = [m["name"] for m in genai.list_models()]
+        logging.info(f"📄 Modèles Gemini disponibles : {available_models}")
+        
+        # On utilise un modèle stable et supporté pour generate_content
+        preferred_model = "gemini-1.5"  # remplacer par un autre modèle disponible si nécessaire
+        if preferred_model in available_models:
+            model = genai.GenerativeModel(model_name=preferred_model)
+            logging.info(f"✅ IA Gemini {preferred_model} activée.")
+        else:
+            logging.warning(f"⚠️ Modèle {preferred_model} non trouvé. Veuillez choisir un modèle dans la liste ci-dessus.")
+            
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
 
@@ -42,6 +52,7 @@ def extraire_texte_page(url):
     except: return ""
 
 def chercher_serpapi(cible):
+    # Requête élargie Bordeaux Régénération
     query = f'"{cible}" (Bordeaux OR Métropole) (friche OR "régénération urbaine" OR délibération OR "portage foncier" OR ZAC OR "avis de marché")'
     params = {"engine": "google", "q": query, "api_key": SERPAPI_KEY, "num": 30, "gl": "fr", "hl": "fr", "tbs": "qdr:m6"}
     try:
@@ -67,14 +78,15 @@ def analyser_ia(item, contenu_web):
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
+        # generate_content est la méthode stable
         res = model.generate_content(prompt)
         text_json = res.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
         return {
             "projet": data.get("projet", item.get("title", "Projet inconnu")),
             "score": int(data.get("score", 0)),
-            "analyse": data.get("analyse") or "Analyse en consultant la source.",
-            "action": data.get("action") or "Surveiller l'évolution."
+            "analyse": data.get("analyse") or data.get("analyse_strategique") or "Consulter la source.",
+            "action": data.get("action") or data.get("action_recommandee") or "Surveiller le dossier."
         }
     except Exception as e:
         logging.warning(f"⚠️ Erreur analyse IA : {e}")
@@ -85,7 +97,7 @@ def analyser_ia(item, contenu_web):
 def envoyer_mail(resultats):
     if not resultats: return
     date_str = datetime.now().strftime('%d/%m/%Y')
-    subject = f"🎯 Radar UA Bordeaux : {len(resultats)} Opportunités"
+    subject = f"🎯 Radar UA Bordeaux : {len(resultats)} Signaux"
     
     blocs = ""
     for o in sorted(resultats, key=lambda x: x['score'], reverse=True):
@@ -95,7 +107,7 @@ def envoyer_mail(resultats):
             <b style="font-size:17px; color:#2c3e50;">{o['projet']}</b> <span style="font-size:12px;">(Score {o['score']}/3)</span><br>
             <p style="margin:10px 0; font-size:14px; color:#333;"><b>Analyse :</b> {o['analyse']}</p>
             <p style="margin:5px 0; font-size:14px; color:#27ae60;"><b>Action :</b> {o['action']}</p>
-            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">LIRE LA SOURCE →</a>
+            <a href="{o['url']}" style="color:{color}; font-weight:bold; text-decoration:none; font-size:12px;">VOIR LA SOURCE →</a>
         </div>"""
 
     full_html = f"""<html><body style="font-family:Arial; background:#f4f4f4; padding:20px;">
@@ -115,7 +127,7 @@ def envoyer_mail(resultats):
 # --- 5. MAIN ---
 
 def main():
-    logging.info("🚀 Scan final 1.5 Flash (Canonique) en cours...")
+    logging.info("🚀 Scan final - Version Stabilisée")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
