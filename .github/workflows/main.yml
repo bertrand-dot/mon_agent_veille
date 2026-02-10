@@ -16,6 +16,9 @@ jobs:
     steps:
     - name: Récupérer le code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Important: récupère tout l'historique
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Installer Python
       uses: actions/setup-python@v5
@@ -35,7 +38,7 @@ jobs:
         GOOGLE_SEARCH_CX: ${{ secrets.GOOGLE_SEARCH_CX }}
       run: python scraper.py
 
-    - name: Sauvegarder l'historique (Force Auth)
+    - name: Sauvegarder l'historique
       run: |
         git config --global user.name "Urban Agency Bot"
         git config --global user.email "bot@urban-agency.com"
@@ -45,6 +48,5 @@ jobs:
           echo "Rien à sauvegarder."
         else
           git commit -m "Mise à jour historique [skip ci]"
-          # C'EST ICI QUE LA MAGIE OPÈRE POUR L'ERREUR 128 :
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+          git push
         fi
