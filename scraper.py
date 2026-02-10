@@ -41,25 +41,26 @@ def sauvegarder_historique(hist):
         json.dump(hist, f, indent=2)
 
 def chercher_serpapi(nom_organisme):
-    """Recherche via SerpApi (moteur Google)"""
+    """Recherche étendue via SerpApi"""
     if not SERPAPI_KEY:
         logging.warning("⚠️ Clé SerpApi manquante.")
         return []
     
-    query = f'"{nom_organisme}" (délibération OR friche OR concours OR aménagement OR ZAC)'
+    # Requête orientée 'Marchés Publics et Urbanisme'
+    query = f'"{nom_organisme}" (délibération OR friche OR concours OR "avis de marché" OR ZAC)'
     url = "https://serpapi.com/search"
     params = {
         "engine": "google",
         "q": query,
         "api_key": SERPAPI_KEY,
-        "num": 10,
+        "num": 20, # AUGMENTÉ : On passe à 20 résultats
         "gl": "fr",
         "hl": "fr",
-        "tbs": "qdr:m6" # Résultats des 6 derniers mois
+        "tbs": "qdr:m6" # 6 derniers mois pour capter les signaux récents
     }
     
     try:
-        res = requests.get(url, params=params, timeout=15).json()
+        res = requests.get(url, params=params, timeout=20).json()
         if "error" in res:
             logging.error(f"❌ Erreur SerpApi: {res['error']}")
             return []
@@ -69,14 +70,22 @@ def chercher_serpapi(nom_organisme):
         return []
 
 def analyser_ia(item):
-    """Analyse stratégique du résultat par l'IA"""
+    """Analyse stratégique avec priorité aux annonces légales"""
     texte = f"Titre: {item.get('title')}\nSnippet: {item.get('snippet')}"
-    prompt = f"""Analyse ce signal pour un cabinet d'architecture. 
-    Score 3: Projet concret, concours, ZAC, reconversion.
-    Score 2: Signal faible, étude urbaine, intention politique.
-    Score 0: Bruit, RH, information inutile.
-    Retourne JSON: {{"titre": "...", "score": 0, "resume": "..."}}
-    Texte: {texte}"""
+    
+    prompt = f"""RÔLE : Directeur du Développement Urban Agency.
+    TACHE : Analyser ce signal pour identifier une opportunité de concours ou de projet urbain.
+    
+    GRILLE DE SCORE :
+    - SCORE 3 (HAUTE PRIORITÉ) : Annonce légale, Avis de marché, Lancement de concours, Création de ZAC.
+    - SCORE 2 (SIGNAL FAIBLE) : Étude urbaine, Reconversion de friche, Intention de projet, Délibération.
+    - SCORE 1 (VEILLE) : Article de presse urbanisme, information de contexte.
+    - SCORE 0 (IGNORER) : RH, Administration pure, Annuaire.
+    
+    ATTENTION : Si le texte mentionne une 'Annonce Légale' ou un 'Marché Public', attribue un score de 3.
+    
+    RETOURNE JSON STRICT : {{"titre": "...", "score": 0, "resume": "..."}}
+    TEXTE : {texte}"""
     
     try:
         res = model.generate_content(prompt)
@@ -88,18 +97,30 @@ def envoyer_mail(opportunites, nom_teste):
     date_str = datetime.now().strftime('%d/%m/%Y')
     
     if not opportunites:
-        subject = f"🔍 Veille UA {date_str} : Aucun signal"
-        html = f"<p>Le radar a scanné <b>{nom_teste}</b> mais aucun nouveau signal n'a été détecté.</p>"
+        subject = f"🔍 Veille UA {date_str} : RAS"
+        html = f"<p>Le radar a scanné 20 résultats pour <b>{nom_teste}</b>. Aucun nouveau signal pertinent détecté.</p>"
     else:
-        subject = f"🎯 Veille UA {date_str} : {len(opportunites)} signaux détectés"
-        blocs = "".join([f"<li style='margin-bottom:15px;'><b>{o['titre']}</b> (Score {o['score']}/3)<br><small>{o['resume']}</small><br><a href='{o['url']}'>Lien source</a></li>" for o in opportunites])
-        html = f"<h3>Signaux identifiés :</h3><ul>{blocs}</ul>"
+        # Tri : les plus hauts scores en premier
+        opportunites.sort(key=lambda x: x['score'], reverse=True)
+        subject = f"🎯 Veille UA {date_str} : {len(opportunites)} opportunités détectées"
+        
+        blocs = ""
+        for o in opportunites:
+            color = "#e74c3c" if o['score'] == 3 else "#3498db" if o['score'] == 2 else "#95a5a6"
+            blocs += f"""
+            <li style='margin-bottom:20px; list-style:none; border-left:4px solid {color}; padding-left:15px;'>
+                <b style='font-size:16px;'>{o['titre']}</b> <span style='color:{color}; font-size:12px;'>(Score {o['score']}/3)</span><br>
+                <i style='font-size:13px; color:#555;'>{o['resume']}</i><br>
+                <a href='{o['url']}' style='color:{color}; font-size:12px; font-weight:bold;'>VOIR LA SOURCE →</a>
+            </li>"""
+        html = f"<h3>Signaux identifiés (Top 20 résultats Google) :</h3><ul>{blocs}</ul>"
 
-    full_html = f"""<html><body style="font-family:Arial; padding:20px;">
-        <img src="{LOGO_URL}" height="40"><br>
-        <h2 style="color:#2c3e50;">Rapport Radar Urban Agency</h2>
-        {html}
-        <hr><p style="font-size:10px; color:#999;">Généré avec SerpApi & Gemini.</p>
+    full_html = f"""<html><body style="font-family:Arial; padding:20px; background:#f9f9f9;">
+        <div style="max-width:600px; margin:auto; background:white; padding:20px; border-radius:8px; border:1px solid #eee;">
+            <img src="{LOGO_URL}" height="40"><br>
+            <h2 style="color:#2c3e50; border-bottom:1px solid #eee; padding-bottom:10px;">Radar Stratégique Urban Agency</h2>
+            {html}
+        </div>
     </body></html>"""
 
     requests.post("https://api.brevo.com/v3/smtp/email", 
@@ -111,7 +132,7 @@ def envoyer_mail(opportunites, nom_teste):
 # --- 3. MAIN ---
 
 def main():
-    logging.info("🚀 Démarrage du scan SerpApi")
+    logging.info("🚀 Démarrage du scan haute-performance (20 résultats)")
     hist = charger_historique()
     resultats = []
     dernier_nom = "Inconnu"
@@ -127,7 +148,7 @@ def main():
             if not nom: continue
             dernier_nom = nom
             
-            logging.info(f"🔎 Recherche SerpApi : {nom}")
+            logging.info(f"🔎 Analyse intensive : {nom}")
             items = chercher_serpapi(nom)
             
             for i in items:
@@ -135,15 +156,17 @@ def main():
                 if not url or url in hist: continue
                 
                 analyse = analyser_ia(i)
-                if analyse.get('score', 0) >= 1:
-                    resultats.append({"url": url, "nom_source": nom, **analyse})
-                
-                # CORRECTION SYNTAXE ICI : On ferme bien le dictionnaire
+                # On mémorise dans l'historique
                 hist[url] = {
                     "date": datetime.now().strftime('%Y-%m-%d'), 
                     "score": analyse.get('score', 0),
                     "source": nom
                 }
+
+                # On n'ajoute au mail que si le score est significatif (1, 2 ou 3)
+                if analyse.get('score', 0) >= 1:
+                    resultats.append({"url": url, "nom_source": nom, **analyse})
+                    logging.info(f"   🔥 Opportunité détectée : {analyse['titre']} (Score {analyse['score']})")
 
     envoyer_mail(resultats, dernier_nom)
     sauvegarder_historique(hist)
