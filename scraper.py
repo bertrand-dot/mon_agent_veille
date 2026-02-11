@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from bs4 import BeautifulSoup
-from google import genai
+import google.generativeai as genai
 from datetime import datetime
 
 # --- 1. CONFIGURATION ---
@@ -17,10 +17,11 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-client = None
+model = None
 if GEMINI_KEY:
     try:
-        client = genai.Client(api_key=GEMINI_KEY)
+        genai.configure(api_key=GEMINI_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
         logging.info("✅ IA Gemini 1.5 Flash activée (Haute Capacité).")
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
@@ -45,11 +46,11 @@ def chercher_serpapi(cible):
         return res.get("organic_results", [])
     except: return []
 
-# --- 3. ANALYSE IA (FIX MODÈLE 1.5 FLASH) ---
+# --- 3. ANALYSE IA (FIX CORRECT SDK) ---
 
 def analyser_ia(item, contenu_web):
-    if not client: return {"score": 0}
-    time.sleep(2) # On augmente la pause à 2s pour être très prudent
+    if not model: return {"score": 0}
+    time.sleep(2) # Pause pour respecter les rate limits
     
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
     prompt = f"""RÔLE : Directeur du Développement Urban Agency.
@@ -68,8 +69,8 @@ def analyser_ia(item, contenu_web):
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        # Utilisation du modèle stable gemini-1.5-flash-latest
-        response = client.models.generate_content(model="gemini-1.5-flash-latest", contents=prompt)
+        # Utilisation correcte du SDK google-generativeai
+        response = model.generate_content(prompt)
         text_json = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
         return data
@@ -95,13 +96,13 @@ def envoyer_mail(resultats):
         <div style="border: 1px solid #e0e0e0; margin-bottom: 30px; background: #ffffff; border-radius: 4px; overflow: hidden;">
             <div style="background: #2c3e50; color: #ffffff; padding: 15px 20px; font-family: {font_header}; text-transform: uppercase;">
                 <table width="100%"><tr>
-                    <td style="font-size: 18px;">🏗️ {o.get('projet')}</td>
+                    <td style="font-size: 18px;">🗝️ {o.get('projet')}</td>
                     <td align="right">{stars}</td>
                 </tr></table>
             </div>
             <div style="padding: 12px 20px; background: #f8f9fa; border-bottom: 1px solid #eee; font-family: {font_body}; font-size: 11px; color: #666;">
                 <table width="100%"><tr>
-                    <td width="25%">📝 <b>PROCÉDURE:</b> {o.get('procedure')}</td>
+                    <td width="25%">📋 <b>PROCÉDURE:</b> {o.get('procedure')}</td>
                     <td width="25%">📅 <b>DEADLINE:</b> {o.get('deadline')}</td>
                     <td width="25%">💰 <b>BUDGET:</b> {o.get('budget')}</td>
                     <td width="25%">🤝 <b>PARTENAIRES:</b> {o.get('partenaires')}</td>
