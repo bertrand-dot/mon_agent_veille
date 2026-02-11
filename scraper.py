@@ -3,6 +3,7 @@ import requests
 import json
 import logging
 import time
+import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
 from google import genai
 from datetime import datetime
@@ -25,17 +26,38 @@ if GEMINI_KEY:
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
 
-# --- 2. COLLECTE ---
+# --- 2. EXTRACTION HYBRIDE (HTML & PDF) ---
 
 def extraire_texte_page(url):
+    """Détecte le type de contenu et extrait le texte brut"""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, timeout=12, headers=headers)
+        res = requests.get(url, timeout=15, headers=headers)
         if res.status_code != 200: return ""
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for s in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']): s.decompose()
-        return " ".join(soup.get_text(separator=' ').split())[:8000]
-    except: return ""
+        
+        content_type = res.headers.get('Content-Type', '').lower()
+        
+        # CAS 1 : C'est un document PDF
+        if 'application/pdf' in content_type or url.lower().endswith('.pdf'):
+            logging.info(f"   📄 Lecture du document PDF : {url[:50]}...")
+            doc = fitz.open(stream=res.content, filetype="pdf")
+            text = ""
+            # On limite à 10 pages pour ne pas saturer l'IA
+            for page in doc[:10]:
+                text += page.get_text()
+            doc.close()
+            return " ".join(text.split())[:10000] # Capacité augmentée pour PDF
+
+        # CAS 2 : C'est une page Web classique (HTML)
+        else:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            for s in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']): s.decompose()
+            text = soup.get_text(separator=' ')
+            return " ".join(text.split())[:8000]
+            
+    except Exception as e:
+        logging.warning(f"⚠️ Erreur extraction sur {url[:30]} : {e}")
+        return ""
 
 def chercher_serpapi(cible):
     query = f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "portage foncier" OR ZAC OR "avis de marché")'
@@ -49,11 +71,11 @@ def chercher_serpapi(cible):
 
 def analyser_ia(item, contenu_web):
     if not client: return {"score": 0}
-    time.sleep(1) # Cadencement de sécurité
+    time.sleep(1) 
     
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
     prompt = f"""RÔLE : Directeur du Développement Urban Agency.
-    MISSION : Analyser l'opportunité urbaine à Bordeaux.
+    MISSION : Extraire les données CRITIQUES et identifier les ACTEURS clés.
     
     FORMAT JSON STRICT :
     {{
@@ -69,11 +91,7 @@ def analyser_ia(item, contenu_web):
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        # Utilisation du modèle gemini-3-flash-preview
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview", 
-            contents=prompt
-        )
+        response = client.models.generate_content(model="gemini-3-flash-preview", contents=prompt)
         text_json = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
         return data
@@ -81,13 +99,12 @@ def analyser_ia(item, contenu_web):
         logging.warning(f"⚠️ Erreur IA : {e}")
         return {"score": 0}
 
-# --- 4. DESIGN DU RAPPORT ---
+# --- 4. DESIGN DU RAPPORT (DIN & ARIAL) ---
 
 def envoyer_mail(resultats):
-    if not resultats: 
-        logging.info("📩 Aucun signal pertinent (Score < 1).")
-        return
+    if not resultats: return
     
+    date_str = datetime.now().strftime('%d/%m/%Y')
     font_header = "'DIN', 'Alternate Gothic', 'Impact', sans-serif"
     font_body = "Arial, Helvetica, sans-serif"
     
@@ -115,6 +132,9 @@ def envoyer_mail(resultats):
                 <div style="background: #f0fdf4; padding: 15px; border-radius: 4px; border-left: 4px solid #22c55e; color: #166534; font-size: 13px; font-weight: bold;">
                     💡 ACTION : {o.get('action')}
                 </div>
+                <div style="margin-top: 15px; text-align: right;">
+                    <a href="{o.get('url')}" style="color: #3b82f6; text-decoration: none; font-size: 12px; font-weight: bold;">CONSULTER LA SOURCE →</a>
+                </div>
             </div>
         </div>"""
 
@@ -123,7 +143,7 @@ def envoyer_mail(resultats):
             <img src="{LOGO_URL}" height="60">
         </div>
         <div style="max-width: 800px; margin: 40px auto; padding: 0 20px;">
-            <h1 style="font-family: {font_header}; text-align: center; text-transform: uppercase;">Radar UA - Bordeaux</h1>
+            <h1 style="font-family: {font_header}; text-align: center; text-transform: uppercase; margin-bottom: 40px;">Intelligence Territoriale - Bordeaux</h1>
             {blocs}
         </div></body></html>"""
 
@@ -136,7 +156,7 @@ def envoyer_mail(resultats):
 # --- 5. EXECUTION ---
 
 def main():
-    logging.info("🚀 Scan final avec Gemini 3-Flash-Preview...")
+    logging.info("🚀 Scan hybride (HTML/PDF) avec Gemini 3 Flash...")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
