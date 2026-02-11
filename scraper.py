@@ -9,12 +9,13 @@ from google import genai
 from datetime import datetime
 
 # --- 1. CONFIGURATION ---
-# Assurez-vous que vos secrets GitHub (API Keys) sont à jour
 GEMINI_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
 BREVO_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
 SERPAPI_KEY = (os.environ.get("SERPAPI_KEY") or "").strip()
 
+LOGO_URL = "https://urban-agency.com/assets/cp-logo.png"
 HISTORY_FILE = "download_history.json"
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 client = None
@@ -23,80 +24,139 @@ if GEMINI_KEY:
         client = genai.Client(api_key=GEMINI_KEY)
         logging.info("✅ Moteur Gemini 2.5 Pro activé (Analyse de Haute Précision).")
     except Exception as e:
-        logging.error(f"❌ Erreur configuration Gemini: {e}")
+        logging.error(f"❌ Erreur config Gemini: {e}")
 
-# --- 2. EXTRACTION DE CONTENU (WEB & PDF) ---
+# --- 2. EXTRACTION HYBRIDE (PDF & HTML) ---
 
-def extraire_texte(url):
-    """Extrait le texte brut d'une page HTML ou d'un document PDF"""
-    headers = {'User-Agent': 'Mozilla/5.0'}
+def extraire_texte_page(url):
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     try:
         res = requests.get(url, timeout=15, headers=headers)
         if res.status_code != 200: return ""
-        
         content_type = res.headers.get('Content-Type', '').lower()
         
-        # Cas PDF : Extraction avec PyMuPDF
         if 'application/pdf' in content_type or url.lower().endswith('.pdf'):
             doc = fitz.open(stream=res.content, filetype="pdf")
-            text = "".join([page.get_text() for page in doc[:10]]) # 10 premières pages
+            text = "".join([page.get_text() for page in doc[:12]]) # Lecture profonde
             doc.close()
-            return " ".join(text.split())[:15000] # Capacité accrue pour le modèle Pro
-
-        # Cas HTML : Nettoyage avec BeautifulSoup
+            return " ".join(text.split())[:12000]
         else:
             soup = BeautifulSoup(res.text, 'html.parser')
             for s in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']): s.decompose()
-            return " ".join(soup.get_text(separator=' ').split())[:12000]
-    except Exception as e:
-        logging.warning(f"⚠️ Erreur lors de l'extraction de {url[:40]}: {e}")
-        return ""
+            return " ".join(soup.get_text(separator=' ').split())[:10000]
+    except: return ""
 
-# --- 3. ANALYSE IA (MODÈLE 2.5 PRO) ---
+def chercher_serpapi(cible):
+    query = f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "portage foncier" OR ZAC OR "avis de marché")'
+    params = {"engine": "google", "q": query, "api_key": SERPAPI_KEY, "num": 20, "gl": "fr", "hl": "fr", "tbs": "qdr:m6"}
+    try:
+        res = requests.get("https://serpapi.com/search", params=params, timeout=20).json()
+        return res.get("organic_results", [])
+    except: return []
+
+# --- 3. ANALYSE IA : LE FILTRE URBAN AGENCY (CPH/DUB) ---
 
 def analyser_ia(item, contenu_web):
-    if not client: return {"score": 0}
-    
-    # Pause de sécurité pour respecter les quotas du modèle Pro
-    # (Peut être réduite à 1-2s si vous avez un compte payant/crédits actifs)
-    time.sleep(12) 
+    if not client: return {"score_etoiles": 0}
+    # Pause réduite à 1s car votre nouveau quota le permet
+    time.sleep(1) 
     
     contexte = contenu_web if len(contenu_web) > 400 else item.get('snippet', '')
     
-    prompt = f"""RÔLE : Expert en analyse de données stratégiques.
-    MISSION : Extraire les informations critiques et évaluer la pertinence opérationnelle.
+    prompt = f"""RÔLE : Associé d'URBAN AGENCY (Bureaux à Copenhague et Dublin).
+    ADN : Nous sommes experts en architecture iconique, urbanisme nordique durable et régénération de friches complexes. 
+    Nous cherchons des projets où notre expertise internationale (densité qualitative, bois, résilience) apporte une vraie valeur.
+
+    MISSION : Analyser ce dossier bordelais.
     
-    CRITÈRES D'ANALYSE :
-    - Score : Sur 5 (5 étant une priorité absolue).
-    - Procédure : Identifier le type de marché ou de consultation.
-    - Échéance : Extraire une date précise uniquement si mentionnée.
-    
+    RÈGLES DE NOTATION :
+    - 5⭐ : Dossier PRIORITAIRE. Concours MOE lancé, consultation promoteur imminente ou projet à échelle métropolitaine (>10k m²).
+    - 3-4⭐ : Opportunité réelle. Étude de programmation en cours ou foncier maîtrisé.
+    - 1-2⭐ : Bruit. Micro-projets, associatif local sans enjeu architectural, ou simple info administrative.
+
     FORMAT JSON STRICT :
     {{
-      "projet": "Nom du projet identifié",
-      "score": 0,
-      "temperature": "CHAUDE (Action immédiate) ou FROIDE (Veille)",
-      "procedure": "Type de procédure",
-      "deadline": "Date limite (ou N/A)",
-      "analyse": "Synthèse stratégique (max 3 phrases)",
-      "action": "Recommandation concrète"
+      "projet": "Nom du site",
+      "score_etoiles": 0,
+      "temperature": "CHAUDE (Action immédiate) ou FROIDE (Vision long terme)",
+      "procedure": "Type de procédure (ZAC, AMI, Concours, PUP...)",
+      "deadline": "EXTRAIRE UNE DATE PRÉCISE uniquement si liée à une échéance de réponse (Concours/AMI). Sinon mettre 'N/A'.",
+      "partenaires": "Aménageurs, Promoteurs ou Élus",
+      "analyse_ua": "Valeur ajoutée spécifique d'UA pour ce projet (max 2 phrases)",
+      "action": "Conseil opérationnel pour Bertrand"
     }}
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-        text_json = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(text_json)
-    except Exception as e:
-        logging.warning(f"⚠️ Erreur IA : {e}")
-        return {"score": 0}
+        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
+        data['score_etoiles'] = min(int(data.get('score_etoiles', 0)), 5)
+        return data
+    except:
+        return {"score_etoiles": 0}
 
-# --- 4. EXÉCUTION PRINCIPALE ---
+# --- 4. DESIGN DU RAPPORT (AFFICHAGE INTELLIGENT) ---
+
+def envoyer_mail(resultats):
+    if not resultats: return
+    font_h = "'DIN', sans-serif"; font_b = "Arial, sans-serif"
+    blocs = ""
+    
+    for o in sorted(resultats, key=lambda x: x.get('score_etoiles', 0), reverse=True):
+        stars = "⭐" * o.get('score_etoiles', 0)
+        is_chaude = "CHAUDE" in o.get('temperature', '').upper()
+        temp_color = "#e74c3c" if is_chaude else "#3498db"
+        temp_label = "🔥 LEAD CHAUDE" if is_chaude else "❄️ VISION STRATÉGIQUE"
+        
+        # On n'affiche la deadline que si elle existe
+        deadline_raw = o.get('deadline', 'N/A')
+        deadline_html = ""
+        if deadline_raw and deadline_raw.upper() != "N/A":
+            deadline_html = f"""<td width="30%" style="color:#d35400; font-weight:bold;">📅 DÉLAI : {deadline_raw}</td>"""
+        
+        blocs += f"""
+        <div style="border:1px solid #e0e0e0; margin-bottom:35px; background:#fff; border-radius:4px; overflow:hidden; box-shadow:0 4px 10px rgba(0,0,0,0.05);">
+            <div style="background:#2c3e50; color:#ffffff; padding:15px 20px; font-family:{font_h}; text-transform:uppercase;">
+                <table width="100%"><tr>
+                    <td style="font-size:18px;">
+                        <span style="background:{temp_color}; padding:2px 8px; border-radius:3px; font-size:10px; vertical-align:middle; margin-right:10px;">{temp_label}</span>
+                        {o.get('projet')}
+                    </td>
+                    <td align="right">{stars}</td>
+                </tr></table>
+            </div>
+            <div style="padding:10px 20px; background:#f8f9fa; border-bottom:1px solid #eee; font-family:{font_b}; font-size:11px; color:#666;">
+                <table width="100%"><tr>
+                    <td width="30%">📝 TYPE : {o.get('procedure')}</td>
+                    {deadline_html}
+                    <td width="40%">🤝 ACTEURS : {o.get('partenaires')}</td>
+                </tr></table>
+            </div>
+            <div style="padding:20px; font-family:{font_b};">
+                <p style="font-size:14px; color:#333; line-height:1.6; margin:0 0 15px 0;"><b>ANALYSE EXPERTE UA :</b> {o.get('analyse_ua')}</p>
+                <div style="background:#f0fdf4; padding:15px; border-radius:4px; border-left:5px solid #22c55e; color:#166534; font-size:13px; font-weight:bold;">
+                    🎯 ACTION : {o.get('action')}
+                </div>
+            </div>
+        </div>"""
+
+    full_html = f"""<html><body style="background:#f3f4f6; margin:0; padding:20px;">
+        <div style="max-width:850px; margin:0 auto;">
+            <div style="background:#ffffff; padding:30px; text-align:center; border-bottom:3px solid #2c3e50;"><img src="{LOGO_URL}" height="60"></div>
+            <h1 style="font-family:{font_h}; text-align:center; text-transform:uppercase; margin:40px 0; color:#111; letter-spacing:2px;">Radar Stratégique Bordeaux</h1>
+            {blocs}
+        </div></body></html>"""
+
+    requests.post("https://api.brevo.com/v3/smtp/email", 
+        json={"sender": {"name": "Radar Urban Agency", "email": "bertrand@urban-agency.com"}, 
+              "to": [{"email": "bertrand@urban-agency.com"}], 
+              "subject": f"🎯 {len(resultats)} Leads Qualifiés : Urban Agency Bordeaux", "htmlContent": full_html}, 
+        headers={"api-key": BREVO_KEY})
+
+# --- 5. EXECUTION ---
 
 def main():
-    logging.info("🚀 Lancement du scan haute précision...")
-    
-    # Chargement de l'historique
+    logging.info("🚀 Scan UA Turbo (Quota Payant débloqué)")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
@@ -104,20 +164,25 @@ def main():
         except: hist = {}
         
     resultats = []
-    # Configurez vos cibles ici
-    cibles = ["Cible 1", "Cible 2"] 
+    cibles = ["Bordeaux Métropole", "Mairie de Bordeaux", "EPA Bordeaux Euratlantique", "EPF Nouvelle-Aquitaine", "La Fabrique de Bordeaux Métropole"]
     
     for cible in cibles:
         logging.info(f"🔎 Investigation : {cible}")
-        # (Logique de recherche via SerpApi ici)
-        # ...
-        
-    # (Logique d'envoi d'email via Brevo ici)
-    # ...
+        for i in chercher_serpapi(cible):
+            url = i.get('link')
+            if not url or url in hist: continue
+            
+            texte = extraire_texte_page(url)
+            analyse = analyser_ia(i, texte)
+            
+            # On ne garde que les leads sérieux (> 1 étoile)
+            if isinstance(analyse, dict) and int(analyse.get('score_etoiles', 0)) >= 2:
+                resultats.append({"url": url, **analyse})
+                logging.info(f"   🎯 Lead Capturé : {analyse.get('projet')} ({analyse.get('score_etoiles')}⭐)")
+            
+            hist[url] = {"date": datetime.now().strftime('%Y-%m-%d')}
 
-    # Sauvegarde de l'historique
-    with open(HISTORY_FILE, 'w') as f:
-        json.dump(hist, f, indent=2)
+    envoyer_mail(resultats)
+    with open(HISTORY_FILE, 'w') as f: json.dump(hist, f, indent=2)
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
