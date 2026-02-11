@@ -21,11 +21,11 @@ client = None
 if GEMINI_KEY:
     try:
         client = genai.Client(api_key=GEMINI_KEY)
-        logging.info("✅ IA Gemini 1.5 Flash activée (Haute Capacité).")
+        logging.info("✅ IA Gemini 3 Flash Preview activée.")
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
 
-# --- 2. FONCTIONS DE COLLECTE ---
+# --- 2. COLLECTE ---
 
 def extraire_texte_page(url):
     try:
@@ -34,7 +34,7 @@ def extraire_texte_page(url):
         if res.status_code != 200: return ""
         soup = BeautifulSoup(res.text, 'html.parser')
         for s in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']): s.decompose()
-        return " ".join(soup.get_text(separator=' ').split())[:7500]
+        return " ".join(soup.get_text(separator=' ').split())[:8000]
     except: return ""
 
 def chercher_serpapi(cible):
@@ -45,15 +45,16 @@ def chercher_serpapi(cible):
         return res.get("organic_results", [])
     except: return []
 
-# --- 3. ANALYSE IA (NOUVEAU SDK GOOGLE-GENAI) ---
+# --- 3. ANALYSE IA (MODÈLE 3-FLASH) ---
 
 def analyser_ia(item, contenu_web):
     if not client: return {"score": 0}
-    time.sleep(2) # Pause pour respecter les rate limits
+    time.sleep(1) # Cadencement de sécurité
     
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
     prompt = f"""RÔLE : Directeur du Développement Urban Agency.
-    MISSION : Analyser l'opportunité urbaine.
+    MISSION : Analyser l'opportunité urbaine à Bordeaux.
+    
     FORMAT JSON STRICT :
     {{
       "projet": "Nom du site",
@@ -61,31 +62,30 @@ def analyser_ia(item, contenu_web):
       "procedure": "Type de procédure",
       "deadline": "Horizon temporel",
       "budget": "Budget/Surface",
-      "partenaires": "Acteurs clés",
+      "partenaires": "Bailleurs, Promoteurs ou BET cités ou logiques",
       "analyse": "Analyse stratégique (3 phrases max)",
       "action": "Action recommandée"
     }}
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        # Utilisation du nouveau SDK avec le modèle correct
+        # Utilisation du modèle gemini-3-flash-preview
         response = client.models.generate_content(
-            model='gemini-1.5-flash-002',
+            model="gemini-3-flash-preview", 
             contents=prompt
         )
         text_json = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
         return data
     except Exception as e:
-        # On affiche l'erreur réelle pour comprendre le blocage
-        logging.warning(f"⚠️ Blocage sur {item.get('title')} : {e}")
+        logging.warning(f"⚠️ Erreur IA : {e}")
         return {"score": 0}
 
-# --- 4. ENVOI DU MAIL ---
+# --- 4. DESIGN DU RAPPORT ---
 
 def envoyer_mail(resultats):
     if not resultats: 
-        logging.info("📩 Aucun résultat pertinent trouvé (score < 1). Pas de mail.")
+        logging.info("📩 Aucun signal pertinent (Score < 1).")
         return
     
     font_header = "'DIN', 'Alternate Gothic', 'Impact', sans-serif"
@@ -98,13 +98,13 @@ def envoyer_mail(resultats):
         <div style="border: 1px solid #e0e0e0; margin-bottom: 30px; background: #ffffff; border-radius: 4px; overflow: hidden;">
             <div style="background: #2c3e50; color: #ffffff; padding: 15px 20px; font-family: {font_header}; text-transform: uppercase;">
                 <table width="100%"><tr>
-                    <td style="font-size: 18px;">🗝️ {o.get('projet')}</td>
+                    <td style="font-size: 18px; letter-spacing: 1px;">🏗️ {o.get('projet')}</td>
                     <td align="right">{stars}</td>
                 </tr></table>
             </div>
             <div style="padding: 12px 20px; background: #f8f9fa; border-bottom: 1px solid #eee; font-family: {font_body}; font-size: 11px; color: #666;">
                 <table width="100%"><tr>
-                    <td width="25%">📋 <b>PROCÉDURE:</b> {o.get('procedure')}</td>
+                    <td width="25%">📝 <b>PROCÉDURE:</b> {o.get('procedure')}</td>
                     <td width="25%">📅 <b>DEADLINE:</b> {o.get('deadline')}</td>
                     <td width="25%">💰 <b>BUDGET:</b> {o.get('budget')}</td>
                     <td width="25%">🤝 <b>PARTENAIRES:</b> {o.get('partenaires')}</td>
@@ -112,8 +112,8 @@ def envoyer_mail(resultats):
             </div>
             <div style="padding: 20px; font-family: {font_body};">
                 <p style="font-size: 14px; color: #333; line-height: 1.6;">{o.get('analyse')}</p>
-                <div style="background: #f0fdf4; padding: 15px; border-radius: 4px; border-left: 4px solid #22c55e; color: #166534; font-size: 13px;">
-                    💡 <b>ACTION :</b> {o.get('action')}
+                <div style="background: #f0fdf4; padding: 15px; border-radius: 4px; border-left: 4px solid #22c55e; color: #166534; font-size: 13px; font-weight: bold;">
+                    💡 ACTION : {o.get('action')}
                 </div>
             </div>
         </div>"""
@@ -127,25 +127,16 @@ def envoyer_mail(resultats):
             {blocs}
         </div></body></html>"""
 
-    try:
-        response = requests.post("https://api.brevo.com/v3/smtp/email", 
-            json={"sender": {"name": "Radar Urban Agency", "email": "bertrand@urban-agency.com"}, 
-                  "to": [{"email": "bertrand@urban-agency.com"}], 
-                  "subject": f"🎯 Radar UA : {len(resultats)} Signaux Bordeaux", 
-                  "htmlContent": full_html}, 
-            headers={"api-key": BREVO_KEY},
-            timeout=10)
-        if response.status_code == 201:
-            logging.info(f"✅ Email envoyé avec succès : {len(resultats)} signaux")
-        else:
-            logging.warning(f"⚠️ Erreur envoi email : {response.status_code} - {response.text}")
-    except Exception as e:
-        logging.error(f"❌ Erreur envoi email : {e}")
+    requests.post("https://api.brevo.com/v3/smtp/email", 
+        json={"sender": {"name": "Radar Urban Agency", "email": "bertrand@urban-agency.com"}, 
+              "to": [{"email": "bertrand@urban-agency.com"}], 
+              "subject": f"🎯 Radar UA : {len(resultats)} Signaux Bordeaux", "htmlContent": full_html}, 
+        headers={"api-key": BREVO_KEY})
 
-# --- 5. MAIN ---
+# --- 5. EXECUTION ---
 
 def main():
-    logging.info("🚀 Scan final Bordeaux en cours...")
+    logging.info("🚀 Scan final avec Gemini 3-Flash-Preview...")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
@@ -169,10 +160,9 @@ def main():
                 resultats.append({"url": url, **analyse})
                 logging.info(f"   🎯 Signal identifié : {analyse.get('projet')}")
             
-            hist[url] = {"date": datetime.now().strftime('%Y-%m-%d'), "score": analyse.get('score', 0) if isinstance(analyse, dict) else 0}
+            hist[url] = {"date": datetime.now().strftime('%Y-%m-%d')}
 
     envoyer_mail(resultats)
     with open(HISTORY_FILE, 'w') as f: json.dump(hist, f, indent=2)
-    logging.info(f"✅ Scan terminé : {len(resultats)} opportunités détectées")
 
 if __name__ == "__main__": main()
