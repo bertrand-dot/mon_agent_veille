@@ -23,7 +23,8 @@ jobs:
       - name: Installer les dépendances
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # Assurez-vous que le fichier se nomme bien requirements.txt dans votre dépôt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Exécuter le script de veille
         env:
@@ -36,7 +37,12 @@ jobs:
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
-          # On ajoute le fichier d'historique s'il a été modifié
-          git add download_history.json
-          # On ne commit que s'il y a des changements pour éviter les erreurs
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Mise à jour de l'historique de veille" && git push)
+          
+          # Vérifier si le fichier d'historique existe avant de l'ajouter
+          if [ -f download_history.json ]; then
+            git add download_history.json
+            # On ne commit et push que s'il y a des changements réels
+            git diff --quiet && git diff --staged --quiet || (git commit -m "Mise à jour de l'historique de veille" && git push)
+          else
+            echo "Aucun fichier d'historique à sauvegarder."
+          fi
