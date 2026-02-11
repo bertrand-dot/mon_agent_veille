@@ -68,8 +68,8 @@ def analyser_ia(item, contenu_web):
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        # Passage au modèle 1.5-flash pour quota maximal (1500/jour)
-        response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
+        # Utilisation du modèle stable gemini-1.5-flash-latest
+        response = client.models.generate_content(model="gemini-1.5-flash-latest", contents=prompt)
         text_json = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
         return data
