@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+from google import genai
 from datetime import datetime
 
 # --- 1. CONFIGURATION ---
@@ -17,11 +17,10 @@ HISTORY_FILE = "download_history.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-model = None
+client = None
 if GEMINI_KEY:
     try:
-        genai.configure(api_key=GEMINI_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        client = genai.Client(api_key=GEMINI_KEY)
         logging.info("✅ IA Gemini 1.5 Flash activée (Haute Capacité).")
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
@@ -46,10 +45,10 @@ def chercher_serpapi(cible):
         return res.get("organic_results", [])
     except: return []
 
-# --- 3. ANALYSE IA (FIX CORRECT SDK) ---
+# --- 3. ANALYSE IA (NOUVEAU SDK GOOGLE-GENAI) ---
 
 def analyser_ia(item, contenu_web):
-    if not model: return {"score": 0}
+    if not client: return {"score": 0}
     time.sleep(2) # Pause pour respecter les rate limits
     
     contexte = contenu_web if len(contenu_web) > 300 else item.get('snippet', '')
@@ -69,8 +68,11 @@ def analyser_ia(item, contenu_web):
     DONNÉES : {item.get('title')} | {contexte}"""
     
     try:
-        # Utilisation correcte du SDK google-generativeai
-        response = model.generate_content(prompt)
+        # Utilisation du nouveau SDK avec le modèle correct
+        response = client.models.generate_content(
+            model='gemini-1.5-flash-002',
+            contents=prompt
+        )
         text_json = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(text_json)
         return data
@@ -125,11 +127,20 @@ def envoyer_mail(resultats):
             {blocs}
         </div></body></html>"""
 
-    requests.post("https://api.brevo.com/v3/smtp/email", 
-        json={"sender": {"name": "Radar Urban Agency", "email": "bertrand@urban-agency.com"}, 
-              "to": [{"email": "bertrand@urban-agency.com"}], 
-              "subject": f"🎯 Radar UA : {len(resultats)} Signaux Bordeaux", "htmlContent": full_html}, 
-        headers={"api-key": BREVO_KEY})
+    try:
+        response = requests.post("https://api.brevo.com/v3/smtp/email", 
+            json={"sender": {"name": "Radar Urban Agency", "email": "bertrand@urban-agency.com"}, 
+                  "to": [{"email": "bertrand@urban-agency.com"}], 
+                  "subject": f"🎯 Radar UA : {len(resultats)} Signaux Bordeaux", 
+                  "htmlContent": full_html}, 
+            headers={"api-key": BREVO_KEY},
+            timeout=10)
+        if response.status_code == 201:
+            logging.info(f"✅ Email envoyé avec succès : {len(resultats)} signaux")
+        else:
+            logging.warning(f"⚠️ Erreur envoi email : {response.status_code} - {response.text}")
+    except Exception as e:
+        logging.error(f"❌ Erreur envoi email : {e}")
 
 # --- 5. MAIN ---
 
@@ -162,5 +173,6 @@ def main():
 
     envoyer_mail(resultats)
     with open(HISTORY_FILE, 'w') as f: json.dump(hist, f, indent=2)
+    logging.info(f"✅ Scan terminé : {len(resultats)} opportunités détectées")
 
 if __name__ == "__main__": main()
