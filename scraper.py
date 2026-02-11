@@ -22,14 +22,14 @@ client = None
 if GEMINI_KEY:
     try:
         client = genai.Client(api_key=GEMINI_KEY)
-        logging.info("✅ Moteur Gemini 2.5 Pro activé (Analyse Haute Précision).")
+        logging.info("✅ Moteur Gemini 2.5 Pro activé (Analyse Stratégique).")
     except Exception as e:
         logging.error(f"❌ Erreur config Gemini: {e}")
 
-# --- 2. EXTRACTION EXPERTE (HTML & PDF) ---
+# --- 2. EXTRACTION EXPERTE (PDF & HTML) ---
 
 def extraire_texte_page(url):
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     try:
         res = requests.get(url, timeout=15, headers=headers)
         if res.status_code != 200: return ""
@@ -39,14 +39,12 @@ def extraire_texte_page(url):
             doc = fitz.open(stream=res.content, filetype="pdf")
             text = "".join([page.get_text() for page in doc[:10]])
             doc.close()
-            return " ".join(text.split())[:12000] # Capacité accrue pour le modèle Pro
+            return " ".join(text.split())[:12000]
         else:
             soup = BeautifulSoup(res.text, 'html.parser')
             for s in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']): s.decompose()
             return " ".join(soup.get_text(separator=' ').split())[:10000]
-    except Exception as e:
-        logging.warning(f"⚠️ Erreur extraction : {e}")
-        return ""
+    except: return ""
 
 def chercher_serpapi(cible):
     query = f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "portage foncier" OR ZAC OR "avis de marché")'
@@ -56,36 +54,36 @@ def chercher_serpapi(cible):
         return res.get("organic_results", [])
     except: return []
 
-# --- 3. ANALYSE STRATÉGIQUE (GEMINI 2.5 PRO) ---
+# --- 3. ANALYSE IA (ADN URBAN AGENCY - CPH/DUB) ---
 
 def analyser_ia(item, contenu_web):
     if not client: return {"score_etoiles": 0}
-    # Le modèle Pro demande un cadencement plus lent en version gratuite
+    # Le modèle Pro demande une pause plus longue pour respecter les quotas Free (2-5 RPM)
     time.sleep(12) 
     
     contexte = contenu_web if len(contenu_web) > 400 else item.get('snippet', '')
     
-    prompt = f"""RÔLE : Directeur du Développement pour URBAN AGENCY (Copenhague & Dublin).
-    CONTEXTE : Nous sommes une agence d'architecture et d'urbanisme experte en régénération de friches, haute densité qualitative, et design iconique nordique.
+    prompt = f"""RÔLE : Directeur du Développement pour l'agence URBAN AGENCY (Bureaux à Copenhague et Dublin).
+    ADN : Nous créons des projets iconiques, à haute densité qualitative, avec une expertise forte en régénération de friches complexes et urbanisme nordique durable.
     
-    MISSION : Évaluer si ce projet bordelais justifie une action commerciale ou créative de notre part.
+    MISSION : Évaluer si ce projet bordelais est une opportunité opérationnelle pour nous.
     
-    CRITÈRES DE FILTRAGE :
-    - Échelle : Priorité aux projets > 5 000 m² ou à fort impact urbain.
-    - Expertise UA : Le projet nécessite-t-il une expertise en bois, gestion de l'eau, ou réversibilité (Nordic Added Value) ?
-    - Score (1-5⭐) : 5 = Concours de maîtrise d'œuvre ou consultation promoteur imminente sur site majeur. 1 = Info administrative mineure.
+    VOTRE GRILLE D'ANALYSE (Score sur 5 étoiles) :
+    - 1-2⭐ (Bruit) : Projets associatifs, permis de construire mineurs, petites rénovations sans enjeu architectural global.
+    - 3⭐ (Intéressant) : Études de programmation, petites ZAC, opportunités de concours restreints.
+    - 4-5⭐ (Prioritaire) : Grands ensembles urbains (>10k m²), mutation de sites portuaires/ferroviaires, projets iconiques publics, besoins critiques en résilience climatique.
 
     FORMAT JSON STRICT :
     {{
-      "projet": "Nom précis du projet",
+      "projet": "Nom du site / dossier",
       "score_etoiles": 0,
-      "temperature": "CHAUDE (Action < 12 mois) ou FROIDE (Vision long terme)",
-      "expertise_requise": "Compétence spécifique UA à mettre en avant",
-      "procedure": "Type de marché ou procédure foncière",
-      "deadline": "Échéance opérationnelle",
-      "partenaires": "Aménageurs, Promoteurs ou Bailleurs clés",
-      "analyse_ua": "Analyse stratégique : pourquoi ce dossier est pour nous ? (max 3 phrases)",
-      "action": "Action concrète pour Bertrand"
+      "temperature": "CHAUDE (Marché/Concours < 12 mois) ou FROIDE (Vision/Stratégie 3-5 ans)",
+      "procedure": "ZAC, Concours, PUP, MGPE, etc.",
+      "deadline": "Horizon temporel de l'action",
+      "budget": "Surface ou montant mentionné",
+      "partenaires": "Aménageurs, Promoteurs ou Élus impliqués",
+      "analyse_ua": "Analyse critique : pourquoi UA doit y aller ? Quelle valeur ajoutée (Nordic/Irish) apporter ?",
+      "action": "Action immédiate pour Bertrand"
     }}
     DONNÉES : {item.get('title')} | {contexte}"""
     
@@ -99,74 +97,65 @@ def analyser_ia(item, contenu_web):
         logging.warning(f"⚠️ Erreur IA : {e}")
         return {"score_etoiles": 0}
 
-# --- 4. INTERFACE MAIL (DESIGN DIN/ARIAL + BADGES) ---
+# --- 4. DESIGN DU RAPPORT (DIN & ARIAL - VISUEL HOT/COLD) ---
 
 def envoyer_mail(resultats):
     if not resultats: return
-    
-    font_header = "'DIN', 'Alternate Gothic', 'Impact', sans-serif"
-    font_body = "Arial, Helvetica, sans-serif"
-    
+    font_h = "'DIN', 'Alternate Gothic', sans-serif"; font_b = "Arial, Helvetica, sans-serif"
     blocs = ""
-    # Tri par score décroissant
+    
     for o in sorted(resultats, key=lambda x: x.get('score_etoiles', 0), reverse=True):
         stars = "⭐" * o.get('score_etoiles', 0)
-        is_chaude = "CHAUDE" in o.get('temperature', '').upper()
-        temp_color = "#e74c3c" if is_chaude else "#3498db"
-        temp_label = "🔥 LEAD CHAUDE" if is_chaude else "❄️ VISION STRATÉGIQUE"
+        is_hot = "CHAUDE" in o.get('temperature', '').upper()
+        badge_color = "#e74c3c" if is_hot else "#3498db"
+        badge_text = "🔥 LEAD CHAUDE" if is_hot else "❄️ VISION LONG TERME"
         
         blocs += f"""
-        <div style="border: 1px solid #e0e0e0; margin-bottom: 40px; background: #ffffff; border-radius: 4px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-            <div style="background: #2c3e50; color: #ffffff; padding: 18px 25px; font-family: {font_header}; text-transform: uppercase;">
+        <div style="border: 1px solid #e0e0e0; margin-bottom: 35px; background: #ffffff; border-radius: 4px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+            <div style="background: #2c3e50; color: #ffffff; padding: 15px 20px; font-family: {font_h}; text-transform: uppercase;">
                 <table width="100%"><tr>
-                    <td style="font-size: 20px; letter-spacing: 1px;">
-                        <span style="background:{temp_color}; padding:2px 10px; border-radius:3px; font-size:11px; vertical-align:middle; margin-right:15px; font-family:sans-serif;">{temp_label}</span>
+                    <td style="font-size: 18px; letter-spacing: 1px;">
+                        <span style="background:{badge_color}; padding:2px 8px; border-radius:3px; font-size:10px; vertical-align:middle; margin-right:12px; font-family:sans-serif;">{badge_text}</span>
                         {o.get('projet')}
                     </td>
-                    <td align="right" style="font-size: 18px;">{stars}</td>
+                    <td align="right" style="font-size: 16px;">{stars}</td>
                 </tr></table>
             </div>
-            <div style="padding: 15px 25px; background: #f8f9fa; border-bottom: 1px solid #eeeeee; font-family: {font_body}; font-size: 12px; color: #555;">
-                <table width="100%"><tr>
-                    <td width="33%">📝 <b>PROCÉDURE :</b> {o.get('procedure')}</td>
-                    <td width="33%">📅 <b>DEADLINE :</b> {o.get('deadline')}</td>
-                    <td width="34%">🤝 <b>ACTEURS :</b> {o.get('partenaires')}</td>
-                </tr></table>
+            
+            <div style="padding: 10px 20px; background: #f8f9fa; border-bottom: 1px solid #eeeeee; font-family: {font_b}; font-size: 11px; color: #666666;">
+                <b>TYPE :</b> {o.get('procedure')} | <b>ÉCHÉANCE :</b> {o.get('deadline')} | <b>ACTEURS :</b> {o.get('partenaires')}
             </div>
-            <div style="padding: 25px; font-family: {font_body};">
-                <p style="margin: 0 0 15px 0; font-size: 15px; color: #333; line-height: 1.7;"><b>L'ANALYSE UA :</b> {o.get('analyse_ua')}</p>
-                <div style="margin-bottom: 15px; font-size: 13px; color: #7f8c8d;">💡 <b>ANGLAGE EXPERTISE :</b> {o.get('expertise_requise')}</div>
-                <div style="background: #f0fdf4; padding: 18px; border-radius: 4px; border-left: 5px solid #22c55e; color: #166534; font-size: 14px; font-weight: bold;">
+            
+            <div style="padding: 20px; font-family: {font_b};">
+                <p style="font-size: 14px; color: #333; line-height: 1.6; margin: 0 0 15px 0;"><b>ANALYSE UA :</b> {o.get('analyse_ua')}</p>
+                <div style="background: #f0fdf4; padding: 15px; border-radius: 4px; border-left: 5px solid #22c55e; color: #166534; font-size: 13px; font-weight: bold;">
                     🎯 ACTION : {o.get('action')}
                 </div>
-                <div style="margin-top: 20px; text-align: right;">
-                    <a href="{o.get('url')}" style="color: #3b82f6; text-decoration: none; font-size: 12px; font-weight: bold; border: 1px solid #3b82f6; padding: 5px 15px; border-radius: 20px;">SOURCE DOCUMENTAIRE →</a>
+                <div style="text-align: right; margin-top: 15px;">
+                    <a href="{o.get('url')}" style="color: #3b82f6; text-decoration: none; font-size: 11px; font-weight: bold; border: 1px solid #3b82f6; padding: 5px 12px; border-radius: 20px;">VOIR LA SOURCE →</a>
                 </div>
             </div>
         </div>"""
 
-    full_html = f"""<html><body style="background: #f3f4f6; margin: 0; padding: 30px;">
-        <div style="max-width: 850px; margin: 0 auto;">
-            <div style="background: #ffffff; padding: 30px; text-align: center; border-bottom: 2px solid #2c3e50;">
-                <img src="{LOGO_URL}" height="65">
+    full_html = f"""<html><body style="background: #f3f4f6; margin: 0; padding: 20px;">
+        <div style="max-width: 800px; margin: 0 auto;">
+            <div style="background: #ffffff; padding: 30px; text-align: center; border-bottom: 3px solid #2c3e50;">
+                <img src="{LOGO_URL}" height="60">
             </div>
-            <h1 style="font-family: {font_header}; text-align: center; text-transform: uppercase; margin: 40px 0; font-size: 32px; letter-spacing: 2px; color: #111;">Intelligence Territoriale - Radar UA</h1>
+            <h1 style="font-family: {font_h}; text-align: center; text-transform: uppercase; margin: 40px 0; font-size: 28px; color: #111;">Radar Stratégique Bordeaux</h1>
             {blocs}
-            <div style="text-align: center; font-family: {font_body}; font-size: 11px; color: #95a5a6; margin-top: 50px;">
-                Ce rapport a été généré par le moteur Gemini 2.5 Pro pour Urban Agency Copenhagen/Dublin.
-            </div>
         </div></body></html>"""
 
     requests.post("https://api.brevo.com/v3/smtp/email", 
         json={"sender": {"name": "Radar Urban Agency", "email": "bertrand@urban-agency.com"}, 
               "to": [{"email": "bertrand@urban-agency.com"}], 
-              "subject": f"🔥 {len(resultats)} Opportunités UA : Focus Bordeaux", "htmlContent": full_html}, 
+              "subject": f"🔥 {len(resultats)} Signaux Qualifiés : Urban Agency Bordeaux", "htmlContent": full_html}, 
         headers={"api-key": BREVO_KEY})
 
 # --- 5. EXECUTION ---
 
 def main():
-    logging.info("🚀 Lancement du Radar UA Expertise (Modèle 2.5 Pro)")
+    logging.info("🚀 Scan Haute Précision UA (Gemini 2.5 Pro)")
     hist = {}
     if os.path.exists(HISTORY_FILE):
         try:
@@ -177,7 +166,7 @@ def main():
     cibles = ["Bordeaux Métropole", "Mairie de Bordeaux", "EPA Bordeaux Euratlantique", "EPF Nouvelle-Aquitaine", "La Fabrique de Bordeaux Métropole"]
     
     for cible in cibles:
-        logging.info(f"🔎 Investigation stratégique : {cible}")
+        logging.info(f"🔎 Investigation : {cible}")
         for i in chercher_serpapi(cible):
             url = i.get('link')
             if not url or url in hist: continue
@@ -185,10 +174,10 @@ def main():
             texte = extraire_texte_page(url)
             analyse = analyser_ia(i, texte)
             
-            # On ne garde que les dossiers avec une réelle pertinence (Score >= 2 pour le modèle Pro)
+            # On ne garde que les leads sérieux (Score >= 2)
             if isinstance(analyse, dict) and int(analyse.get('score_etoiles', 0)) >= 2:
                 resultats.append({"url": url, **analyse})
-                logging.info(f"   🎯 Lead Identifié : {analyse.get('projet')} ({analyse.get('score_etoiles')}⭐)")
+                logging.info(f"   🎯 Lead : {analyse.get('projet')} ({analyse.get('score_etoiles')}⭐)")
             
             hist[url] = {"date": datetime.now().strftime('%Y-%m-%d')}
 
