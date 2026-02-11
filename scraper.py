@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import csv
-import fitz
+import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
 from google import genai
 from datetime import datetime
@@ -14,6 +14,7 @@ from collections import defaultdict
 GEMINI_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
 BREVO_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
 SERPAPI_KEY = (os.environ.get("SERPAPI_KEY") or "").strip()
+
 LOGO_URL = "https://urban-agency.com/assets/cp-logo.png"
 HISTORY_FILE = "download_history.json"
 
@@ -23,25 +24,56 @@ client = None
 if GEMINI_KEY:
     try:
         client = genai.Client(api_key=GEMINI_KEY)
+        logging.info("✅ Moteur Gemini 2.5 Pro activé.")
     except Exception as e:
         logging.error(f"❌ Erreur Gemini : {e}")
 
-# --- 2. ROTATION ET CHARGEMENT ---
+# --- 2. GESTION DES CIBLES ---
 
-def obtenir_fichier_du_jour():
-    jours = {0: "cibles_idf.csv", 1: "cibles_nord_est.csv", 2: "cibles_nord_ouest.csv", 3: "cibles_sud_ouest.csv", 4: "cibles_sud_est.csv"}
-    return jours.get(datetime.now().weekday(), "cibles_sud_ouest.csv")
-
-def charger_organismes(nom_fichier):
+def charger_cibles(nom_fichier="cibles.csv"):
+    """Charge la liste des organismes depuis le fichier CSV unique"""
     cibles = []
     if os.path.exists(nom_fichier):
-        with open(nom_fichier, mode='r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                cibles.append(row['Nom de l\'Organisme'])
+        try:
+            with open(nom_fichier, mode='r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # On récupère la colonne 'Nom de l\'Organisme'
+                    nom = row.get('Nom de l\'Organisme') or row.get('nom')
+                    if nom:
+                        cibles.append(nom.strip())
+            logging.info(f"📂 {len(cibles)} cibles chargées depuis {nom_fichier}")
+        except Exception as e:
+            logging.error(f"❌ Erreur lecture CSV : {e}")
+    else:
+        logging.error(f"⚠️ Fichier {nom_fichier} introuvable.")
     return cibles
 
-# --- 3. ANALYSE IA : LE CERVEAU UA ---
+# --- 3. EXTRACTION ---
+
+def extraire_contenu(url):
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        res = requests.get(url, timeout=12, headers=headers)
+        if res.status_code != 200: return ""
+        if 'application/pdf' in res.headers.get('Content-Type', '').lower() or url.lower().endswith('.pdf'):
+            doc = fitz.open(stream=res.content, filetype="pdf")
+            text = "".join([p.get_text() for p in doc[:10]])
+            doc.close()
+            return " ".join(text.split())[:15000]
+        soup = BeautifulSoup(res.text, 'html.parser')
+        for s in soup(['script', 'style', 'nav', 'footer', 'header']): s.decompose()
+        return " ".join(soup.get_text(separator=' ').split())[:12000]
+    except: return ""
+
+def chercher_serpapi(cible):
+    query = f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "portage foncier" OR ZAC OR "avis de marché" OR "AMI")'
+    params = {"engine": "google", "q": query, "api_key": SERPAPI_KEY, "num": 12, "gl": "fr", "hl": "fr", "tbs": "qdr:m1"}
+    try:
+        return requests.get("https://serpapi.com/search", params=params, timeout=20).json().get("organic_results", [])
+    except: return []
+
+# --- 4. ANALYSE IA (ADN URBAN AGENCY) ---
 
 def analyser_opportunite(item, texte):
     if not client: return None
@@ -57,7 +89,7 @@ def analyser_opportunite(item, texte):
       "categorie": "SPRINT, RADAR, EXPLORATION ou RÉSEAU",
       "score_interne": 0,
       "deadline": "Date ou N/A",
-      "matching_dna": "Expertise clé (Bois, Densité, Waterfront)",
+      "matching_dna": "Lien ADN (ex: Bois, Densité, Waterfront)",
       "analyse_ua": "Analyse de l'enjeu architectural et urbain (30 mots max)",
       "action": "Action concrète pour Bertrand"
     }}
@@ -70,20 +102,15 @@ def analyser_opportunite(item, texte):
         return data
     except: return None
 
-# --- 4. SYNTHÈSES STRATÉGIQUES (VERSION PARTAGEABLE) ---
+# --- 5. SYNTHÈSES STRATÉGIQUES PARTAGEABLES ---
 
 def generer_synthese(leads, mode="executif"):
-    if not leads: return "Veille territoriale en cours."
+    if not leads: return "Analyse en cours."
     
     if mode == "executif":
-        consigne = """Rédige une note de synthèse tactique courte (3 puces max). 
-        Utilise des émojis. L'objectif est de donner une 'température' du marché actuelle : 
-        quelles sont les forces en présence, les types de projets qui accélèrent, et les opportunités de partenariat."""
+        consigne = "Rédige une note de synthèse tactique courte (3 puces max). Utilise des émojis. Analyse la 'température' du marché : quels projets accélèrent et opportunités de partenariat."
     else:
-        consigne = """Rédige une analyse stratégique prospective (1 paragraphe de 3-4 lignes). 
-        Doit être instructif et valorisant pour UA. Analyse les tendances lourdes du territoire 
-        (ex: transition écologique, mutation des friches, nouveaux usages). 
-        Le ton doit être expert, partageable avec un client potentiel pour démontrer notre vision."""
+        consigne = "Rédige une analyse stratégique prospective (3-4 lignes). Ton expert, instructif et partageable avec un client/partenaire. Analyse les tendances lourdes du territoire pour démontrer notre vision."
     
     try:
         prompt = f"En tant qu'associé UA, {consigne}. Données : {json.dumps(leads)}"
@@ -91,10 +118,9 @@ def generer_synthese(leads, mode="executif"):
         return response.text
     except: return "Analyse indisponible."
 
-# --- 5. INTERFACE ET ENVOI ---
+# --- 6. INTERFACE ET ENVOI ---
 
-def envoyer_rapport(top_10, res_exec, res_strat, cluster_name):
-    # Sécurisation HTML
+def envoyer_rapport(top_10, res_exec, res_strat):
     exec_html = res_exec.replace('\n', '<br>')
     strat_html = res_strat.replace('\n', '<br>')
     
@@ -128,7 +154,7 @@ def envoyer_rapport(top_10, res_exec, res_strat, cluster_name):
                     <div style="margin-top:10px; border-top:1px dashed #eee; padding-top:10px; font-weight:bold; color:#166534;">
                         🎯 ACTION : {o.get('action')}
                     </div>
-                    <div style="text-align:right; margin-top:5px;"><a href="{o.get('url')}" style="color:#3498db; font-size:10px; text-decoration:none;">Lien Source ↗</a></div>
+                    <div style="text-align:right; margin-top:5px;"><a href="{o.get('url')}" style="color:#3498db; font-size:10px; text-decoration:none;">Source Documentaire ↗</a></div>
                 </div>
             </div>"""
 
@@ -137,20 +163,49 @@ def envoyer_rapport(top_10, res_exec, res_strat, cluster_name):
             <div style="text-align:center; margin-bottom:30px;"><img src="{LOGO_URL}" height="50"></div>
             
             <div style="background:#fff3cd; padding:25px; border-radius:2px; margin-bottom:35px; border-left:5px solid #f1c40f; font-size:13px;">
-                <b style="font-family:{font_h}; font-size:12px; color:#856404; text-transform:uppercase;">🚀 Résumé Exécutif - Intelligence {cluster_name}</b><br><br>{exec_html}
+                <b style="font-family:{font_h}; font-size:12px; color:#856404; text-transform:uppercase;">🚀 Résumé Exécutif - Intelligence Marché</b><br><br>{exec_html}
             </div>
 
             {content_grouped}
 
             <div style="margin-top:40px; padding:25px; background:#e1f5fe; border-radius:2px; border-left:5px solid #0288d1; font-size:13px; color:#01579b;">
-                <b style="font-family:{font_h}; font-size:12px; color:#0288d1; text-transform:uppercase;">🔬 Vision & Tendances Marché</b><br><br>{strat_html}
+                <b style="font-family:{font_h}; font-size:12px; color:#0288d1; text-transform:uppercase;">🔬 Vision & Tendances Stratégiques</b><br><br>{strat_html}
             </div>
         </div></body></html>"""
 
     requests.post("https://api.brevo.com/v3/smtp/email", 
-        json={"sender": {"name": "Radar UA", "email": "bertrand@urban-agency.com"}, 
+        json={"sender": {"name": "Radar UA Elite", "email": "bertrand@urban-agency.com"}, 
               "to": [{"email": "bertrand@urban-agency.com"}], 
-              "subject": f"🎯 Intelligence Territoriale : {cluster_name} - {datetime.now().strftime('%d/%m')}", "htmlContent": full_html}, 
+              "subject": f"🎯 Intelligence Territoriale : {datetime.now().strftime('%d/%m')} - Top 10 Leads", "htmlContent": full_html}, 
         headers={"api-key": BREVO_KEY})
 
-# --- 6. MAIN (IDENTIQUE AVEC ROTATION) ---
+# --- 7. MAIN ---
+
+def main():
+    cibles = charger_cibles("cibles.csv")
+    if not cibles: return
+    
+    hist = {}
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r') as f: hist = json.load(f)
+        except: hist = {}
+        
+    leads = []
+    for cible in cibles:
+        logging.info(f"🔎 Scan : {cible}")
+        for i in chercher_serpapi(cible):
+            url = i.get('link')
+            if not url or url in hist: continue
+            texte = extraire_contenu(url)
+            analyse = analyser_opportunite(i, texte)
+            if analyse and analyse.get('score_interne', 0) >= 2:
+                leads.append(analyse)
+            hist[url] = {"date": datetime.now().strftime('%Y-%m-%d')}
+
+    top_10 = sorted(leads, key=lambda x: x.get('score_interne', 0), reverse=True)[:10]
+    
+    envoyer_rapport(top_10, generer_synthese(top_10, "executif"), generer_synthese(leads, "strat"))
+    with open(HISTORY_FILE, 'w') as f: json.dump(hist, f, indent=2)
+
+if __name__ == "__main__": main()
