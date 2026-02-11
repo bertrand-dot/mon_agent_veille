@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import csv
-import fitz
+import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
 from google import genai
 from datetime import datetime
@@ -14,8 +14,10 @@ from collections import defaultdict
 GEMINI_KEY = (os.environ.get("GEMINI_API_KEY") or "").strip()
 BREVO_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
 SERPAPI_KEY = (os.environ.get("SERPAPI_KEY") or "").strip()
+
 LOGO_URL = "https://urban-agency.com/assets/cp-logo.png"
 HISTORY_FILE = "download_history.json"
+ARCHIVE_FILE = "leads_archive.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -27,9 +29,20 @@ if GEMINI_KEY:
     except Exception as e:
         logging.error(f"❌ Erreur Gemini : {e}")
 
-# --- 2. GESTION DES CIBLES ---
+# --- 2. GESTION GÉOGRAPHIQUE & ROTATION ---
 
-def charger_cibles(nom_fichier="cibles.csv"):
+def obtenir_secteur_du_jour():
+    """Rotation : 1 jour = 1 secteur cible"""
+    config_jours = {
+        0: {"file": "cibles_idf.csv", "name": "IDF", "emoji": "🗼"},
+        1: {"file": "cibles_nord_est.csv", "name": "NORD-EST", "emoji": "🏭"},
+        2: {"file": "cibles_nord_ouest.csv", "name": "NORD-OUEST", "emoji": "🌊"},
+        3: {"file": "cibles_sud_ouest.csv", "name": "SUD-OUEST", "emoji": "🍷"},
+        4: {"file": "cibles_sud_est.csv", "name": "SUD-EST", "emoji": "☀️"}
+    }
+    return config_jours.get(datetime.now().weekday(), config_jours[3])
+
+def charger_cibles(nom_fichier):
     cibles = []
     if os.path.exists(nom_fichier):
         try:
@@ -38,11 +51,11 @@ def charger_cibles(nom_fichier="cibles.csv"):
                 for row in reader:
                     nom = row.get('Nom de l\'Organisme') or row.get('nom')
                     if nom: cibles.append(nom.strip())
-            logging.info(f"📂 {len(cibles)} cibles chargées depuis {nom_fichier}.")
-        except Exception as e: logging.error(f"❌ Erreur CSV : {e}")
+        except Exception as e:
+            logging.error(f"❌ Erreur CSV : {e}")
     return cibles
 
-# --- 3. ANALYSE IA : LE CERVEAU UA (FILTRES D'EXCLUSION STRICTS) ---
+# --- 3. ANALYSE IA : LE CERVEAU UA (FILTRAGE HAUTE SÉLECTIVITÉ) ---
 
 def analyser_opportunite(item, texte):
     if not client: return None
@@ -88,10 +101,9 @@ def analyser_opportunite(item, texte):
         response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
         data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
         
-        # Double vérification sur mots-clés d'exclusion critiques
+        # Filtre de sécurité final
         titre = data['projet'].lower()
-        mots_interdits = ["solaire", "photovoltaïque", "pmr", "amiante", "chaudière", "ravalement"]
-        if any(x in titre for x in mots_interdits):
+        if any(x in titre for x in ["solaire", "photovoltaïque", "pmr", "amiante", "chaudière"]): 
             return None
             
         data['url'] = item.get('link')
@@ -114,9 +126,26 @@ def generer_synthese(leads, mode="executif"):
         return response.text
     except: return "Analyse indisponible."
 
-# --- 5. INTERFACE ET ENVOI ---
+# --- 5. GESTION DE L'ARCHIVE ---
 
-def envoyer_rapport(top_10, res_exec, res_strat):
+def mettre_a_jour_archive(nouveaux_leads):
+    archive = []
+    if os.path.exists(ARCHIVE_FILE):
+        try:
+            with open(ARCHIVE_FILE, 'r') as f: archive = json.load(f)
+        except: archive = []
+    
+    for l in nouveaux_leads:
+        if not any(a['url'] == l['url'] for a in archive):
+            archive.insert(0, l)
+    
+    with open(ARCHIVE_FILE, 'w') as f: json.dump(archive[:50], f, indent=2)
+    return archive[:20]
+
+# --- 6. INTERFACE MAIL ---
+
+def envoyer_rapport(top_10, archive_leads, res_exec, res_strat, secteur):
+    # Sécurisation HTML (remplacement des sauts de ligne)
     exec_html = res_exec.replace('\n', '<br>')
     strat_html = res_strat.replace('\n', '<br>')
     
@@ -142,24 +171,27 @@ def envoyer_rapport(top_10, res_exec, res_strat):
                     </tr></table>
                 </div>
                 <div style="padding:15px; font-size:12px; line-height:1.5;">
-                    <table width="100%"><tr>
-                        <td width="30%">📅 <b>DÉLAI :</b> {o.get('deadline')}</td>
-                        <td width="70%">🧬 <b>ADN :</b> {o.get('matching_dna')}</td>
-                    </tr></table>
+                    <table width="100%"><tr><td width="30%">📅 <b>DÉLAI :</b> {o.get('deadline')}</td><td width="70%">🧬 <b>ADN :</b> {o.get('matching_dna')}</td></tr></table>
                     <p style="margin:10px 0; color:#444;"><b>ANALYSE :</b> {o.get('analyse_ua')}</p>
-                    <div style="margin-top:10px; border-top:1px dashed #eee; padding-top:10px; font-weight:bold; color:#166534;">
-                        🎯 ACTION : {o.get('action')}
-                    </div>
+                    <div style="margin-top:10px; border-top:1px dashed #eee; padding-top:10px; font-weight:bold; color:#166534;">🎯 ACTION : {o.get('action')}</div>
                     <div style="text-align:right; margin-top:5px;"><a href="{o.get('url')}" style="color:#3498db; font-size:10px; text-decoration:none;">Source Documentaire ↗</a></div>
                 </div>
             </div>"""
+
+    # Bloc Archive
+    archive_html = ""
+    for a in archive_leads:
+        archive_html += f"<div style='border-bottom:1px solid #ddd; padding:8px 0; font-size:11px; color:#555;'>• <b>{a['projet']}</b> : {a['analyse_ua']} <a href='{a['url']}' style='color:#3498db; text-decoration:none;'>[Lien ↗]</a></div>"
+
+    semaine = datetime.now().isocalendar()[1]
+    subject = f"{secteur['emoji']} UA Radar {secteur['name']} / Sem. {semaine}"
 
     full_html = f"""<html><body style="background:#f4f4f4; padding:20px; font-family:{font_b}; color:#333;">
         <div style="max-width:750px; margin:auto; background:#fff; padding:40px; border-radius:3px; border:1px solid #ddd;">
             <div style="text-align:center; margin-bottom:30px;"><img src="{LOGO_URL}" height="50"></div>
             
             <div style="background:#fff3cd; padding:25px; border-radius:2px; margin-bottom:35px; border-left:5px solid #f1c40f; font-size:13px;">
-                <b style="font-family:{font_h}; font-size:12px; color:#856404; text-transform:uppercase;">🚀 Résumé Exécutif - Intelligence Marché</b><br><br>{exec_html}
+                <b style="font-family:{font_h}; font-size:12px; color:#856404; text-transform:uppercase;">🚀 Résumé Exécutif - {secteur['name']}</b><br><br>{exec_html}
             </div>
 
             {content_grouped}
@@ -167,15 +199,20 @@ def envoyer_rapport(top_10, res_exec, res_strat):
             <div style="margin-top:40px; padding:25px; background:#e1f5fe; border-radius:2px; border-left:5px solid #0288d1; font-size:13px; color:#01579b;">
                 <b style="font-family:{font_h}; font-size:12px; color:#0288d1; text-transform:uppercase;">🔬 Vision & Tendances Stratégiques</b><br><br>{strat_html}
             </div>
+
+            <div style="margin-top:50px; padding:25px; background:#f9f9f9; border-radius:2px; border:1px solid #eee; color:#666;">
+                <b style="text-transform:uppercase; font-size:10px; color:#999; font-family:{font_h};">📚 Archive : Rappel des 20 derniers leads qualifiés</b>
+                <div style="margin-top:15px; max-height:400px; overflow:hidden;">{archive_html}</div>
+            </div>
         </div></body></html>"""
 
     requests.post("https://api.brevo.com/v3/smtp/email", 
         json={"sender": {"name": "Radar UA Elite", "email": "bertrand@urban-agency.com"}, 
               "to": [{"email": "bertrand@urban-agency.com"}], 
-              "subject": f"🎯 Intelligence {datetime.now().strftime('%d/%m')} : Top 10 Leads", "htmlContent": full_html}, 
+              "subject": subject, "htmlContent": full_html}, 
         headers={"api-key": BREVO_KEY})
 
-# --- 6. EXTRACTION & MAIN ---
+# --- 7. EXTRACTION & MAIN ---
 
 def extraire_contenu(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -200,7 +237,8 @@ def chercher_serpapi(cible):
     except: return []
 
 def main():
-    cibles = charger_cibles("cibles.csv")
+    secteur = obtenir_secteur_du_jour()
+    cibles = charger_cibles(secteur['file'])
     if not cibles: return
     
     hist = {}
@@ -209,7 +247,7 @@ def main():
             with open(HISTORY_FILE, 'r') as f: hist = json.load(f)
         except: hist = {}
         
-    leads = []
+    leads_du_jour = []
     for cible in cibles:
         logging.info(f"🔎 Scan : {cible}")
         for i in chercher_serpapi(cible):
@@ -218,12 +256,16 @@ def main():
             texte = extraire_contenu(url)
             analyse = analyser_opportunite(i, texte)
             if analyse and analyse.get('score_interne', 0) >= 2:
-                leads.append(analyse)
+                leads_du_jour.append(analyse)
             hist[url] = {"date": datetime.now().strftime('%Y-%m-%d')}
 
-    top_10 = sorted(leads, key=lambda x: x.get('score_interne', 0), reverse=True)[:10]
+    top_10 = sorted(leads_du_jour, key=lambda x: x.get('score_interne', 0), reverse=True)[:10]
+    archive_20 = mettre_a_jour_archive(leads_du_jour)
     
-    envoyer_rapport(top_10, generer_synthese(top_10, "executif"), generer_synthese(leads, "strat"))
+    res_exec = generer_synthese(top_10, "executif")
+    res_strat = generer_synthese(leads_du_jour, "strat")
+
+    envoyer_rapport(top_10, archive_20, res_exec, res_strat, secteur)
     with open(HISTORY_FILE, 'w') as f: json.dump(hist, f, indent=2)
 
 if __name__ == "__main__": main()
