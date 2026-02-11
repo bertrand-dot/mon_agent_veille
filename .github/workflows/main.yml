@@ -1,48 +1,40 @@
-name: Radar Urban Agency
+name: UA Radar National
 
 on:
   schedule:
-    # Exécution automatique tous les jours à 8h00 UTC
-    - cron: '0 8 * * *'
-  workflow_dispatch:
-    # Permet de lancer le script manuellement depuis l'onglet Actions
+    # Exécution à 08:00 UTC (09:00 ou 10:00 heure de Paris) du lundi au vendredi
+    - cron: '0 8 * * 1-5'
+  workflow_dispatch: # Permet de lancer le script manuellement depuis l'onglet Actions
 
 jobs:
-  build:
+  run-radar:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Récupérer le code du dépôt
+      - name: 📥 Récupération du dépôt
         uses: actions/checkout@v4
 
-      - name: Configurer Python
+      - name: 🐍 Configuration de Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip' # Optimise la vitesse des lancements suivants
 
-      - name: Installer les dépendances
+      - name: 📦 Installation des dépendances
         run: |
           python -m pip install --upgrade pip
-          # Assurez-vous que le fichier se nomme bien requirements.txt dans votre dépôt
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install requests beautifulsoup4 google-genai pymupdf
 
-      - name: Exécuter le script de veille
+      - name: 🎯 Exécution du Radar UA
+        run: python scraper.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
-        run: python scraper.py
 
-      - name: Sauvegarder l'historique (Commit & Push)
-        run: |
-          git config --global user.name "GitHub Action Bot"
-          git config --global user.email "actions@github.com"
-          
-          # Vérifier si le fichier d'historique existe avant de l'ajouter
-          if [ -f download_history.json ]; then
-            git add download_history.json
-            # On ne commit et push que s'il y a des changements réels
-            git diff --quiet && git diff --staged --quiet || (git commit -m "Mise à jour de l'historique de veille" && git push)
-          else
-            echo "Aucun fichier d'historique à sauvegarder."
-          fi
+      - name: 💾 Sauvegarde de l'historique et des archives
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🤖 [Auto] Mise à jour de l'historique et des archives"
+          file_pattern: 'download_history.json leads_archive.json'
+          branch: main
