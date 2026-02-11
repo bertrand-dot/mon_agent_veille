@@ -55,18 +55,18 @@ def chercher_serpapi(cible):
 
 def analyser_ia(item, contenu_web):
     if not client: return None
-    time.sleep(1) # Utilisation du quota turbo
+    time.sleep(1) # Utilisation du quota turbo / payant
     
     prompt = f"""RÔLE : Associé Senior chez URBAN AGENCY (CPH/DUB).
     EXPERTISE : Architecture iconique, régénération de friches, design nordique durable.
 
-    MISSION : Qualifier ce signal selon la matrice stratégique UA.
+    MISSION : Qualifier ce signal selon la stratégie UA.
 
-    MATRICE DE CLASSEMENT :
-    1. LE SPRINT : Officiel (Concours, AMI, Offre). Deadline < 30j. Budget > 10M€. 
+    CATÉGORIES :
+    1. LE SPRINT : Publication officielle (Concours, AMI, Offre). Deadline < 30j. Budget > 10M€. 
     2. LE RADAR : Anticipation (Délibération, ZAC, PIN). Horizon 3-9 mois.
-    3. L'EXPLORATION : Nouveau territoire ou innovation (Bas-carbone, réemploi).
-    4. RÉSEAU : Partenaire (BET/Paysagiste) identifié mais architecte non nommé.
+    3. L'EXPLORATION : Nouveau territoire ou innovation (Bas-carbone, réemploi, biodiversité).
+    4. RÉSEAU : Partenaire (BET/Paysagiste) identifié sur un projet majeur mais architecte non nommé.
 
     FORMAT JSON STRICT :
     {{
@@ -74,10 +74,10 @@ def analyser_ia(item, contenu_web):
       "autorite": "Donneur d'ordre (ex: EPA, Ville, La Fabrique)",
       "categorie": "SPRINT, RADAR, EXPLORATION ou RÉSEAU",
       "score_etoiles": 0,
-      "deadline": "Date précise ou N/A",
+      "deadline": "Date précise (AMI/AO) ou N/A",
       "budget": "Budget estimé",
-      "partenaires": "Acteurs détectés",
-      "analyse_ua": "Valeur ajoutée CPH/DUB (max 2 phrases)",
+      "partenaires": "BET ou Paysagistes détectés",
+      "analyse_ua": "Valeur ajoutée UA (CPH/DUB) (max 2 phrases)",
       "action": "Action concrète immédiate"
     }}
     DATA : {item.get('title')} | {contenu_web[:8000]}"""
@@ -100,23 +100,32 @@ def generer_synthese(leads, type_synthese="executif"):
         return response.text
     except: return "Synthèse indisponible."
 
-# --- 5. INTERFACE MAIL (TOP 10 + GROUPAGE) ---
+# --- 5. INTERFACE ET ENVOI ---
 
 def envoyer_mail(top_10, resume_exec, analyse_strat):
-    font_h = "'DIN', sans-serif"; font_b = "Arial, sans-serif"
+    font_h = "'DIN', sans-serif"
+    font_b = "Arial, sans-serif"
     
+    # Correction SyntaxError : Préparer les textes AVANT la f-string
+    resume_exec_html = resume_exec.replace('\n', '<br>')
+    analyse_strat_html = analyse_strat.replace('\n', '<br>')
+    
+    # Groupage par Autorité
     grouped = defaultdict(list)
     for r in top_10: grouped[r.get('autorite', 'Autres')].append(r)
     
     content_grouped = ""
-    for autorite, leads in grouped.items():
-        content_grouped += f"<h2 style='font-family:{font_h}; color:#2c3e50; border-bottom:2px solid #2c3e50; padding-top:20px;'>🏢 {autorite}</h2>"
-        for o in leads:
+    for autorite, items in grouped.items():
+        content_grouped += f"<h2 style='font-family:{font_h}; color:#2c3e50; border-bottom:2px solid #2c3e50; padding-top:20px; margin-bottom:15px;'>🏢 {autorite}</h2>"
+        for o in items:
             stars = "⭐" * o.get('score_etoiles', 0)
             cat = o.get('categorie', 'RADAR')
             colors = {"SPRINT": "#e74c3c", "RADAR": "#e67e22", "EXPLORATION": "#3498db", "RÉSEAU": "#9b59b6"}
             bg_color = colors.get(cat, "#7f8c8d")
-            deadline_txt = f"<span style='color:#e74c3c; font-weight:bold;'>[ÉCHÉANCE: {o.get('deadline')}]</span>" if o.get('deadline') != "N/A" else ""
+            
+            deadline_tag = ""
+            if o.get('deadline') and o.get('deadline') != "N/A":
+                deadline_tag = f"<span style='color:#e74c3c; font-weight:bold;'>[ÉCHÉANCE: {o.get('deadline')}]</span>"
 
             content_grouped += f"""
             <div style="border:1px solid #ddd; margin-bottom:25px; background:#fff; border-radius:4px; overflow:hidden; font-family:{font_b};">
@@ -133,9 +142,9 @@ def envoyer_mail(top_10, resume_exec, analyse_strat):
                     </tr></table>
                 </div>
                 <div style="padding:15px; font-size:13px;">
-                    <p><b>INFO :</b> {deadline_txt} {o.get('budget')} | <b>RÉSEAU :</b> {o.get('partenaires')}</p>
+                    <p><b>INFOS :</b> {deadline_tag} {o.get('budget')} | <b>RÉSEAU :</b> {o.get('partenaires')}</p>
                     <p><b>ANALYSE UA :</b> <i>{o.get('analyse_ua')}</i></p>
-                    <div style="background:#f0fdf4; padding:10px; border-left:4px solid #22c55e; color:#166534; font-weight:bold;">🎯 ACTION : {o.get('action')}</div>
+                    <div style="background:#f0fdf4; padding:12px; border-left:4px solid #22c55e; color:#166534; font-weight:bold;">🎯 ACTION : {o.get('action')}</div>
                 </div>
             </div>"""
 
@@ -145,21 +154,21 @@ def envoyer_mail(top_10, resume_exec, analyse_strat):
             
             <div style="background:#fff3cd; border:1px solid #ffeeba; padding:25px; border-radius:4px; margin:30px 0;">
                 <h3 style="margin-top:0; font-family:{font_h}; color:#856404; text-transform:uppercase;">📜 Résumé Exécutif & Priorités</h3>
-                <div style="font-size:14px; line-height:1.6;">{resume_exec.replace('\\n', '<br>')}</div>
+                <div style="font-size:14px; line-height:1.6;">{resume_exec_html}</div>
             </div>
 
             {content_grouped}
 
             <div style="background:#e1f5fe; border:1px solid #b3e5fc; padding:25px; border-radius:4px; margin-top:40px;">
                 <h3 style="margin-top:0; font-family:{font_h}; color:#01579b; text-transform:uppercase;">🔬 Analyse Stratégique & Visions</h3>
-                <div style="font-size:14px; line-height:1.6; color:#01579b;">{analyse_strat.replace('\\n', '<br>')}</div>
+                <div style="font-size:14px; line-height:1.6; color:#01579b;">{analyse_strat_html}</div>
             </div>
         </div></body></html>"""
 
     requests.post("https://api.brevo.com/v3/smtp/email", 
         json={"sender": {"name": "Radar UA", "email": "bertrand@urban-agency.com"}, 
               "to": [{"email": "bertrand@urban-agency.com"}], 
-              "subject": f"🎯 Top 10 Intelligence Bordeaux : {datetime.now().strftime('%d/%m')}", "htmlContent": full_html}, 
+              "subject": f"🎯 Top 10 Intelligence : {datetime.now().strftime('%d/%m')}", "htmlContent": full_html}, 
         headers={"api-key": BREVO_KEY})
 
 # --- 6. MAIN ---
@@ -185,11 +194,15 @@ def main():
                 leads.append(analyse)
             hist[url] = {"date": datetime.now().strftime('%Y-%m-%d')}
 
+    # Tri et sélection des 10 meilleurs
     top_10 = sorted(leads, key=lambda x: x.get('score_etoiles', 0), reverse=True)[:10]
-    visions = [a for a in leads if a.get('categorie') in ['RADAR', 'EXPLORATION'] and a not in top_10]
     
+    # Synthèse basée sur le top 10 pour l'exécutif
     resume_exec = generer_synthese(top_10, "executif")
-    analyse_strat = generer_synthese(visions, "strategique")
+    
+    # Synthèse basée sur les autres signaux (Visions) pour la partie stratégique
+    visions_leads = [a for a in leads if a not in top_10]
+    analyse_strat = generer_synthese(visions_leads if visions_leads else top_10, "strategique")
     
     envoyer_mail(top_10, resume_exec, analyse_strat)
     with open(HISTORY_FILE, 'w') as f: json.dump(hist, f, indent=2)
