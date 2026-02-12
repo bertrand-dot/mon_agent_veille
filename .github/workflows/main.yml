@@ -2,9 +2,10 @@ name: UA Radar National
 
 on:
   schedule:
-    # Exécution à 08:00 UTC (09:00 ou 10:00 heure de Paris) du lundi au vendredi
-    - cron: '0 8 * * 1-5'
-  workflow_dispatch: # Permet de lancer le script manuellement depuis l'onglet Actions
+    # 03:00 UTC = 04:00 à Copenhague (Heure d'hiver)
+    # Lancement anticipé pour compenser les 2h40 d'exécution
+    - cron: '0 3 * * 1-5'
+  workflow_dispatch: 
 
 jobs:
   run-radar:
@@ -18,7 +19,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip' # Optimise la vitesse des lancements suivants
+          cache: 'pip'
 
       - name: 📦 Installation des dépendances
         run: |
@@ -35,6 +36,6 @@ jobs:
       - name: 💾 Sauvegarde de l'historique et des archives
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🤖 [Auto] Mise à jour de l'historique et des archives"
+          commit_message: "🤖 [Auto] Mise à jour archive et historique"
           file_pattern: 'download_history.json leads_archive.json'
           branch: main
