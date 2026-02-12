@@ -35,7 +35,7 @@ def obtenir_secteur_du_jour():
     config_jours = {
         0: {"file": "cibles_idf.csv", "name": "IDF", "emoji": "🗼"},
         1: {"file": "cibles_nord_est.csv", "name": "NORD-EST", "emoji": "🏭"},
-        2: {"file": "cibles_nord_ouest.csv", "name": "NORD-OUEST", "emoji": "🌊"}, # Front Atlantique
+        2: {"file": "cibles_nord_ouest.csv", "name": "NORD-OUEST", "emoji": "🌊"},
         3: {"file": "cibles_sud_ouest.csv", "name": "SUD-OUEST", "emoji": "🍷"},
         4: {"file": "cibles_sud_est.csv", "name": "SUD-EST", "emoji": "☀️"}
     }
@@ -54,7 +54,7 @@ def charger_cibles(nom_fichier):
             logging.error(f"❌ Erreur CSV : {e}")
     return cibles
 
-# --- 3. ANALYSE IA : LE CERVEAU UA (STRUCTURE CONSERVÉE ET DURCIE) ---
+# --- 3. ANALYSE IA : STRUCTURE STRICTE ---
 
 def analyser_opportunite(item, texte):
     if not client: return None
@@ -76,54 +76,72 @@ def analyser_opportunite(item, texte):
     4. RÉSEAU : Partenaire identifié mais architecte non nommé.
 
     --- RÈGLES D'EXCLUSION STRICTES (NE PAS RETENIR SI) ---
-    1. MISSION TECHNIQUE : Rénovation énergétique seule (ITE, menuiseries, CVC), mise aux normes PMR/Incendie, infrastructures pures (pylônes, parking surface), diagnostics.
-    2. BUDGET/SURFACE : < 10M€ HT ou < 2000m2 (logement/tertiaire) / < 1000m2 (équipement), sauf exception iconique.
-    3. PETIT PROGRAMME : Micro-équipements (abribus, sanitaires), Tertiaire local (agences, cabinets médicaux), Logement < 15 lots.
-    4. COMMERCIAL STANDARD : Hangars, box de stockage, supermarchés isolés.
+    1. NATURE DE MISSION (TECHNIQUE & ENTRETIEN) : 
+       - Rénovation énergétique isolée (ITE seule, menuiseries, CVC/Chaudières).
+       - Mise aux normes seule (PMR, Sécurité incendie, Désenfumage).
+       - Infrastructures pures (STEP, pylônes, parking surface, éclairage, signalétique).
+       - Expertises & Diagnostics (Amiante, Plomb, Audit énergétique, Études de sol, Topo).
+    
+    2. VOLUME ET ENJEU ÉCONOMIQUE :
+       - Budget travaux < 10M€ HT (Sauf si mention "Équipement d'exception" ou "Concours international").
+       - Surfaces < 2 000 m² (logement/tertiaire) ou < 1 000 m² (équipement).
+       - Petite main : Entretien courant, ravalement simple, aménagement boutique.
+    
+    3. TYPOLOGIE DE PROGRAMME :
+       - Micro-Équipements (Abribus, sanitaires, locaux poubelles, extensions classes uniques, garages).
+       - Tertiaire proximité (Banques, Postes, cabinets médicaux, bureaux de poste).
+       - Logement diffus (Maisons isolées, collectifs < 15 logements sauf si luxe/spécifique).
+       - Commercial standard (Hangars, Box de stockage, supermarchés "boîtes" sans mixité).
 
-    --- CRITÈRES DE SÉVÉRITÉ SUPPLÉMENTAIRES (RÈGLES D'OR) ---
-    - ÉLIMINER si DATE DÉPASSÉE : Si la date limite de réponse est antérieure au {date_du_jour}. (Ex: Centre Jean-Rostand = REJET).
-    - ÉLIMINER si ARCHITECTE DÉJÀ DÉSIGNÉ : Si un lauréat ou attributaire est nommé. (Ex: 13ème Folie Montpellier = REJET).
-    - ÉLIMINER le BRUIT INDUSTRIEL : Pas d'actualités économiques pures sans projet urbain/architectural défini.
-    - ÉLIMINER RÉSEAUX SOCIAUX BRUYANTS : Aucun lead issu d'Instagram ou Facebook. LinkedIn autorisé.
-    - ANCIENNETÉ : Rejeter tout document ou article de plus de 12 mois.
+    --- PRÉCISIONS & SÉVÉRITÉ (FILTRES QUALITATIFS) ---
+    - ÉLIMINER si DATE DÉPASSÉE : Rejeter si la date limite est antérieure au {date_du_jour}.
+    - ÉLIMINER si ARCHITECTE DÉJÀ DÉSIGNÉ : Rejeter si un lauréat ou attributaire est nommé.
+    - ÉLIMINER le BRUIT INDUSTRIEL : Rejeter les actualités économiques sans projet architectural défini.
+    - ÉLIMINER RÉSEAUX SOCIAUX : Aucun lead issu d'Instagram ou Facebook. LinkedIn autorisé (posts < 6 mois).
 
     --- FORMAT DE SORTIE JSON ---
-    IMPORTANT : L'analyse doit être riche et instructive pour nos partenaires. Pas d'émojis dans les champs 'analyse_ua' et 'action'.
+    IMPORTANT : Analyse riche de 60-80 mots. Pas d'émojis dans 'analyse_ua' et 'action'.
     {{
-      "projet": "Nom précis du projet",
+      "projet": "Nom précis",
       "autorite": "Donneur d'ordre",
       "categorie": "SPRINT, RADAR, EXPLORATION ou RÉSEAU",
       "score_interne": 0,
-      "deadline": "Date précise (vérifier validité)",
-      "matching_dna": "Lien ADN court",
-      "analyse_ua": "Analyse détaillée de l'enjeu architectural et urbain (60-80 mots)",
-      "action": "Action concrète et détaillée pour Bertrand (sans émoji)"
+      "deadline": "Date ou N/A",
+      "matching_dna": "Lien ADN",
+      "analyse_ua": "Analyse détaillée de l'enjeu architectural et urbain",
+      "action": "Action concrète et détaillée pour Bertrand"
     }}
     DATA : {item.get('title')} | {texte[:9000]}"""
     
     try:
         response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-        data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
+        raw_text = response.text.replace('```json', '').replace('```', '').strip()
+        data = json.loads(raw_text)
         
-        # Filtre de sécurité URL supplémentaire
-        source_url = item.get('link', '').lower()
-        if any(x in source_url for x in ["instagram.com", "facebook.com"]): return None
+        # Sécurité : Si l'IA renvoie une liste, on extrait le premier objet
+        if isinstance(data, list):
+            data = data[0] if len(data) > 0 else None
+            
+        if data:
+            source_url = item.get('link', '').lower()
+            if any(x in source_url for x in ["instagram.com", "facebook.com"]): return None
+            data['url'] = item.get('link')
             
         return data
-    except: return None
+    except Exception as e:
+        logging.warning(f"⚠️ Erreur parsing IA : {e}")
+        return None
 
-# --- 4. RECHERCHE CIBLÉE (LINKEDIN + WEB) ---
+# --- 4. RECHERCHE WEB & LINKEDIN ---
 
 def chercher_serpapi(cible):
     resultats = []
-    # Mix de recherche Web et LinkedIn (limite 6 mois pour LinkedIn)
     queries = [
         f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "avis de marché") -site:facebook.com -site:instagram.com',
-        f'site:linkedin.com/posts/ "{cible}" (concours OR projet OR aménagement OR foncier)'
+        f'site:linkedin.com/posts/ "{cible}" (concours OR projet OR aménagement)'
     ]
     for q in queries:
-        params = {"engine": "google", "q": q, "api_key": SERPAPI_KEY, "num": 12, "gl": "fr", "hl": "fr", "tbs": "qdr:y" if "linkedin" not in q else "qdr:m6"}
+        params = {"engine": "google", "q": q, "api_key": SERPAPI_KEY, "num": 12, "gl": "fr", "hl": "fr", "tbs": "qdr:y"}
         try:
             res = requests.get("https://serpapi.com/search", params=params, timeout=20).json().get("organic_results", [])
             resultats.extend(res)
@@ -133,14 +151,14 @@ def chercher_serpapi(cible):
 # --- 5. SYNTHÈSES STRATÉGIQUES ---
 
 def generer_synthese(leads, mode="executif"):
-    if not leads: return "Veille territoriale : aucun dossier majeur qualifié (dates dépassées ou lauréats déjà nommés écartés)."
+    if not leads: return "Veille active : aucun dossier qualifié ce jour selon nos critères de sévérité."
     
     consigne = (
-        "Rédige une note tactique courte (3 puces max). Utilise des émojis. Analyse la température du marché. "
-        "IMPORTANT : Ne commence JAMAIS par 'Voici la note tactique...' ou toute phrase d'introduction similaire."
+        "Note tactique (3 puces max). Émojis. "
+        "INTERDICTION : Ne commence JAMAIS par 'Voici...' ou 'Voici le résumé...'. Entre direct dans le vif du sujet."
     ) if mode == "executif" else (
-        "Analyse prospective (3-4 lignes). Ton expert, instructif et partageable. Analyse les tendances lourdes. "
-        "IMPORTANT : Ne commence JAMAIS par 'Voici l'analyse stratégique...'."
+        "Analyse prospective (3-4 lignes). Expert et partageable. "
+        "INTERDICTION : Ne commence pas par une phrase d'introduction."
     )
     
     try:
@@ -149,7 +167,19 @@ def generer_synthese(leads, mode="executif"):
         return response.text.strip()
     except: return "Analyse indisponible."
 
-# --- 6. INTERFACE ET ENVOI ---
+# --- 6. INTERFACE ET ARCHIVE ---
+
+def mettre_a_jour_archive(nouveaux_leads):
+    archive = []
+    if os.path.exists(ARCHIVE_FILE):
+        try:
+            with open(ARCHIVE_FILE, 'r') as f: archive = json.load(f)
+        except: archive = []
+    for l in nouveaux_leads:
+        if not any(a.get('url') == l.get('url') for a in archive):
+            archive.insert(0, l)
+    with open(ARCHIVE_FILE, 'w') as f: json.dump(archive[:50], f, indent=2)
+    return archive[:20]
 
 def envoyer_rapport(top_leads, archive_leads, res_exec, res_strat, secteur):
     exec_html = res_exec.replace('\n', '<br>')
@@ -184,10 +214,9 @@ def envoyer_rapport(top_leads, archive_leads, res_exec, res_strat, secteur):
                 </div>
             </div>"""
 
-    # Bloc Archive Gris
     archive_html = ""
     for a in archive_leads:
-        archive_html += f"<div style='border-bottom:1px solid #ddd; padding:8px 0; font-size:11px; color:#555;'>• <b>{a['projet']}</b> : {a['analyse_ua'][:100]}... <a href='{a['url']}' style='color:#3498db; text-decoration:none;'>[Fiche ↗]</a></div>"
+        archive_html += f"<div style='border-bottom:1px solid #ddd; padding:8px 0; font-size:11px; color:#555;'>• <b>{a.get('projet')}</b> : {a.get('analyse_ua', '')[:110]}... <a href='{a.get('url')}'>[Lien ↗]</a></div>"
 
     semaine = datetime.now().isocalendar()[1]
     subject = f"{secteur['emoji']} UA Radar {secteur['name']} / Sem. {semaine}"
@@ -195,17 +224,13 @@ def envoyer_rapport(top_leads, archive_leads, res_exec, res_strat, secteur):
     full_html = f"""<html><body style="background:#f4f4f4; padding:20px; font-family:{font_b}; color:#333;">
         <div style="max-width:750px; margin:auto; background:#fff; padding:40px; border-radius:3px; border:1px solid #ddd;">
             <div style="text-align:center; margin-bottom:30px;"><img src="{LOGO_URL}" height="50"></div>
-            
             <div style="background:#fff3cd; padding:25px; border-radius:2px; margin-bottom:35px; border-left:5px solid #f1c40f; font-size:13px;">
                 <b style="font-family:{font_h}; font-size:12px; color:#856404; text-transform:uppercase;">🚀 Résumé Exécutif - {secteur['name']}</b><br><br>{exec_html}
             </div>
-
             {content_grouped}
-
             <div style="margin-top:40px; padding:25px; background:#e1f5fe; border-radius:2px; border-left:5px solid #0288d1; font-size:13px; color:#01579b;">
                 <b style="font-family:{font_h}; font-size:12px; color:#0288d1; text-transform:uppercase;">🔬 Vision & Tendances Stratégiques</b><br><br>{strat_html}
             </div>
-
             <div style="margin-top:50px; padding:25px; background:#f9f9f9; border-radius:2px; border:1px solid #eee; color:#666;">
                 <b style="text-transform:uppercase; font-size:10px; color:#999; font-family:{font_h};">📚 Archive : Rappel des 20 derniers leads qualifiés</b>
                 <div style="margin-top:15px;">{archive_html}</div>
@@ -235,17 +260,6 @@ def extraire_contenu(url):
         return " ".join(soup.get_text(separator=' ').split())[:12000]
     except: return ""
 
-def mettre_a_jour_archive(nouveaux_leads):
-    archive = []
-    if os.path.exists(ARCHIVE_FILE):
-        try:
-            with open(ARCHIVE_FILE, 'r') as f: archive = json.load(f)
-        except: archive = []
-    for l in nouveaux_leads:
-        if not any(a['url'] == l['url'] for a in archive): archive.insert(0, l)
-    with open(ARCHIVE_FILE, 'w') as f: json.dump(archive[:50], f, indent=2)
-    return archive[:20]
-
 def main():
     secteur = obtenir_secteur_du_jour()
     cibles = charger_cibles(secteur['file'])
@@ -265,11 +279,11 @@ def main():
             if not url or url in hist: continue
             texte = extraire_contenu(url)
             analyse = analyser_opportunite(i, texte)
-            if analyse and analyse.get('score_interne', 0) >= 2:
+            
+            if isinstance(analyse, dict) and analyse.get('score_interne', 0) >= 2:
                 leads_du_jour.append(analyse)
             hist[url] = {"date": datetime.now().strftime('%Y-%m-%d')}
 
-    # Réglage dynamique du nombre de leads
     limit = 15 if secteur['name'] in ["IDF", "NORD-OUEST"] else 10
     top_leads = sorted(leads_du_jour, key=lambda x: x.get('score_interne', 0), reverse=True)[:limit]
     
