@@ -2,8 +2,8 @@ name: UA Radar National
 
 on:
   schedule:
-    # 03:00 UTC = 04:00 à Copenhague (Heure d'hiver)
-    # Lancement anticipé pour compenser les 2h40 d'exécution
+    # 03:00 UTC = 04:00 à Copenhague. 
+    # Permet de finir le scan (env. 2h40) avant 08:00.
     - cron: '0 3 * * 1-5'
   workflow_dispatch: 
 
