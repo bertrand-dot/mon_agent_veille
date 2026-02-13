@@ -1,0 +1,19 @@
+name: 🧪 RUN TEST LAB
+
+on:
+  workflow_dispatch: 
+
+jobs:
+  test-laser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests beautifulsoup4 google-genai pymupdf
+      - run: python Lab/test_scraper.py
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
