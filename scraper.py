@@ -71,18 +71,18 @@ def analyser_opportunite(item, texte):
     
     date_du_jour = datetime.now().strftime("%d/%m/%Y")
     
-    prompt = f"""RÔLE : Associé Senior URBAN AGENCY (Copenhague/Dublin).
-    MISSION : Qualifier ce signal français au regard de notre ADN.
+    prompt = f"""RÔLE : Associé Senior URBAN AGENCY en charge du Business Développement (Copenhague/Dublin).
+    MISSION : Qualifier ce signal au regard de notre ADN.
     DATE DU JOUR : {date_du_jour}
 
     --- ADN VALORISÉ ---
     Iconique, Régénération friches, Densité qualitative, Construction Bois, Waterfront/Résilience.
 
     --- MATRICE DE CLASSEMENT ---
-    1. SPRINT : AO/AMI officiel. Deadline < 30j. Budget > 10M€. Focus: Références.
+    1. SPRINT : Appel d´offre et appel à candidature de maitrise d´oeuvre / Appel à projet /AMI officiel. Deadline < 30j. Budget > 10M€ + architecte non designé.
     2. RADAR : Anticipation (Délibération, ZAC, PIN). Horizon 3-9 mois.
-    3. EXPLORATION : Innovation (Bas-carbone, réemploi, biodiversité).
-    4. RÉSEAU : Partenaire identifié mais architecte non nommé.
+    3. EXPLORATION : Innovation sur le territoire (Bas-carbone, réemploi, biodiversité). Designation d´un programmiste
+    4. RÉSEAU : Partenaire identifié  ayant un interet pour URBAN AGENCY .
 
     --- RÈGLES D'EXCLUSION STRICTES (NE PAS RETENIR SI) ---
     1. NATURE DE MISSION (TECHNIQUE & ENTRETIEN) : 
@@ -93,7 +93,7 @@ def analyser_opportunite(item, texte):
     
     2. VOLUME ET ENJEU ÉCONOMIQUE :
        - Budget travaux < 10M€ HT (Sauf si mention "Équipement d'exception" ou "Concours international").
-       - Surfaces < 2 000 m² (logement/tertiaire) ou < 1 000 m² (équipement).
+       - Surfaces < 3 000 m² (logement/tertiaire) ou < 5 000 m² (équipement).
        - Petite main : Entretien courant, ravalement simple, aménagement boutique.
     
     3. TYPOLOGIE DE PROGRAMME :
@@ -104,8 +104,8 @@ def analyser_opportunite(item, texte):
 
     --- PRÉCISIONS & SÉVÉRITÉ (FILTRES QUALITATIFS) ---
     - ÉLIMINER si DATE DÉPASSÉE : Rejeter si la date limite de réponse est antérieure au {date_du_jour}.
-    - ÉLIMINER si ARCHITECTE DÉJÀ DÉSIGNÉ : Rejeter si un lauréat ou attributaire est nommé.
-    - ÉLIMINER le BRUIT INDUSTRIEL : Rejeter les actualités économiques sans projet architectural défini.
+    - ÉLIMINER si ARCHITECTE OU URBANISTE DÉJÀ DÉSIGNÉ : Rejeter si un lauréat ou attributaire est nommé.
+    - ÉLIMINER le BRUIT INDUSTRIEL : Rejeter les actualités économiques sans lien avec un projet architectural ou urbain.
     - ÉLIMINER RÉSEAUX SOCIAUX : Aucun lead issu d'Instagram ou Facebook. LinkedIn autorisé (posts < 6 mois).
 
     --- FORMAT DE SORTIE JSON ---
@@ -118,7 +118,7 @@ def analyser_opportunite(item, texte):
       "deadline": "Date ou N/A",
       "matching_dna": "Lien ADN",
       "analyse_ua": "Analyse détaillée de l'enjeu architectural et urbain (60-80 mots)",
-      "action": "Action concrète et détaillée pour Bertrand"
+      "action": "Action concrète et détaillée"
     }}
     DATA : {item.get('title')} | {texte[:9000]}"""
     
@@ -144,7 +144,7 @@ def analyser_opportunite(item, texte):
 def chercher_serpapi(cible):
     resultats = []
     queries = [
-        f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "avis de marché") -site:facebook.com -site:instagram.com',
+        f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "avis de marché"),
         f'site:linkedin.com/posts/ "{cible}" (concours OR projet OR aménagement)'
     ]
     for q in queries:
@@ -169,7 +169,7 @@ def generer_synthese(leads, mode="executif"):
     )
     
     try:
-        prompt = f"En tant qu'associé UA, {consigne}. Données : {json.dumps(leads)}"
+        prompt = f"En tant qu'associé en charge du Business Développement UA, {consigne}. Données : {json.dumps(leads)}"
         response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
         return response.text.strip()
     except: return "Analyse indisponible."
