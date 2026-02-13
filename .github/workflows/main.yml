@@ -2,10 +2,10 @@ name: UA Radar National
 
 on:
   schedule:
-    # 03:00 UTC = 04:00 à Copenhague. 
-    # Indispensable pour finir le scan avant 08:00.
+    # 03:00 UTC = 04:00 à Copenhague.
+    # Ce créneau garantit une réception avant 08:00 malgré le temps de scan.
     - cron: '0 3 * * 1-5'
-  workflow_dispatch: 
+  workflow_dispatch: # Permet le lancement manuel pour tests
 
 jobs:
   run-radar:
@@ -33,9 +33,10 @@ jobs:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
 
-      - name: 💾 Sauvegarde de l'historique et des archives
+      - name: 💾 Sauvegarde sectorisée (Archives et Historique)
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🤖 [Auto] Mise à jour archive et historique"
-          file_pattern: 'download_history.json leads_archive.json'
+          commit_message: "🤖 [Auto] Mise à jour historique et archives sectorielles"
+          # Pattern mis à jour pour capturer tous les fichiers JSON par région
+          file_pattern: 'download_history.json leads_archive_*.json'
           branch: main
