@@ -30,7 +30,7 @@ if GEMINI_KEY:
     except Exception as e:
         logging.error(f"❌ Erreur Gemini : {e}")
 
-# --- 2. GESTION GÉOGRAPHIQUE & CORRECTIF ENCODAGE ---
+# --- 2. GESTION GÉOGRAPHIQUE & CORRECTIF ENCODAGE CSV ---
 
 def obtenir_secteur_du_jour():
     config_jours = {
@@ -46,12 +46,11 @@ def charger_cibles(nom_fichier):
     cibles = []
     if os.path.exists(nom_fichier):
         content = None
-        # Test successif des encodages pour gérer les exports Excel
         for enc in ['utf-8-sig', 'latin-1', 'cp1252', 'utf-8']:
             try:
                 with open(nom_fichier, mode='r', encoding=enc) as f:
                     content = f.read()
-                logging.info(f"📖 Fichier {nom_fichier} lu avec succès (Encodage: {enc})")
+                logging.info(f"📖 Fichier {nom_fichier} lu avec succès ({enc})")
                 break
             except UnicodeDecodeError:
                 continue
@@ -63,7 +62,7 @@ def charger_cibles(nom_fichier):
                 if nom: cibles.append(nom.strip())
     return cibles
 
-# --- 3. ANALYSE IA : VOTRE STRUCTURE DE PROMPT CONSERVÉE ---
+# --- 3. ANALYSE IA : STRUCTURE PROMPT SANCTUARISÉE ---
 
 def analyser_opportunite(item, texte):
     if not client: return None
@@ -71,18 +70,18 @@ def analyser_opportunite(item, texte):
     
     date_du_jour = datetime.now().strftime("%d/%m/%Y")
     
-    prompt = f"""RÔLE : Associé Senior URBAN AGENCY en charge du Business Développement (Copenhague/Dublin).
-    MISSION : Qualifier ce signal au regard de notre ADN.
+    prompt = f"""RÔLE : Associé Senior URBAN AGENCY (Copenhague/Dublin).
+    MISSION : Qualifier ce signal français au regard de notre ADN.
     DATE DU JOUR : {date_du_jour}
 
     --- ADN VALORISÉ ---
     Iconique, Régénération friches, Densité qualitative, Construction Bois, Waterfront/Résilience.
 
     --- MATRICE DE CLASSEMENT ---
-    1. SPRINT : Appel d´offre et appel à candidature de maitrise d´oeuvre / Appel à projet /AMI officiel. Deadline < 30j. Budget > 10M€ + architecte non designé.
+    1. SPRINT : Appel d'offre et appel à candidature de maitrise d'oeuvre / Appel à projet / AMI officiel. Deadline < 30j. Budget > 10M€ + architecte non designé.
     2. RADAR : Anticipation (Délibération, ZAC, PIN). Horizon 3-9 mois.
-    3. EXPLORATION : Innovation sur le territoire (Bas-carbone, réemploi, biodiversité). Designation d´un programmiste
-    4. RÉSEAU : Partenaire identifié  ayant un interet pour URBAN AGENCY .
+    3. EXPLORATION : Innovation sur le territoire (Bas-carbone, réemploi, biodiversité). Designation d'un programmiste.
+    4. RÉSEAU : Partenaire identifié ayant un interet pour URBAN AGENCY.
 
     --- RÈGLES D'EXCLUSION STRICTES (NE PAS RETENIR SI) ---
     1. NATURE DE MISSION (TECHNIQUE & ENTRETIEN) : 
@@ -102,11 +101,12 @@ def analyser_opportunite(item, texte):
        - Logement diffus (Maisons isolées, collectifs < 15 logements sauf si luxe/spécifique).
        - Commercial standard (Hangars, Box de stockage, supermarchés "boîtes" sans mixité).
 
-    --- PRÉCISIONS & SÉVÉRITÉ (FILTRES QUALITATIFS) ---
+    --- FILTRES DE SÉVÉRITÉ ---
     - ÉLIMINER si DATE DÉPASSÉE : Rejeter si la date limite de réponse est antérieure au {date_du_jour}.
-    - ÉLIMINER si ARCHITECTE OU URBANISTE DÉJÀ DÉSIGNÉ : Rejeter si un lauréat ou attributaire est nommé.
-    - ÉLIMINER le BRUIT INDUSTRIEL : Rejeter les actualités économiques sans lien avec un projet architectural ou urbain.
+    - ÉLIMINER si ARCHITECTE DÉJÀ DÉSIGNÉ : Rejeter si un lauréat ou attributaire est nommé.
+    - ÉLIMINER le BRUIT INDUSTRIEL : Rejeter les actualités économiques sans projet architectural défini.
     - ÉLIMINER RÉSEAUX SOCIAUX : Aucun lead issu d'Instagram ou Facebook. LinkedIn autorisé (posts < 6 mois).
+    - ANCIENNETÉ : Écarter toute information de plus d'un an.
 
     --- FORMAT DE SORTIE JSON ---
     IMPORTANT : Analyse riche de 60-80 mots. Pas d'émojis dans 'analyse_ua' et 'action'.
@@ -118,7 +118,7 @@ def analyser_opportunite(item, texte):
       "deadline": "Date ou N/A",
       "matching_dna": "Lien ADN",
       "analyse_ua": "Analyse détaillée de l'enjeu architectural et urbain (60-80 mots)",
-      "action": "Action concrète et détaillée"
+      "action": "Action concrète et détaillée pour Bertrand"
     }}
     DATA : {item.get('title')} | {texte[:9000]}"""
     
@@ -136,15 +136,16 @@ def analyser_opportunite(item, texte):
             
         return data
     except Exception as e:
-        logging.warning(f"⚠️ Erreur analyse : {e}")
+        logging.warning(f"⚠️ Erreur parsing : {e}")
         return None
 
-# --- 4. RECHERCHE CIBLÉE ---
+# --- 4. RECHERCHE WEB & LINKEDIN ---
 
 def chercher_serpapi(cible):
     resultats = []
+    # Requêtes corrigées (f-string refermées)
     queries = [
-        f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "avis de marché"),
+        f'"{cible}" (friche OR "régénération urbaine" OR délibération OR "avis de marché") -site:facebook.com -site:instagram.com',
         f'site:linkedin.com/posts/ "{cible}" (concours OR projet OR aménagement)'
     ]
     for q in queries:
@@ -162,14 +163,14 @@ def generer_synthese(leads, mode="executif"):
     
     consigne = (
         "Note tactique (3 puces max). Émojis. "
-        "INTERDICTION : Ne commence JAMAIS par 'Voici...' ou 'Voici le résumé...'. Entre direct dans le vif du sujet."
+        "INTERDICTION : Ne commence JAMAIS par 'Voici...' ou 'Voici le résumé...'. Entre direct dans le sujet."
     ) if mode == "executif" else (
         "Analyse prospective (3-4 lignes). Expert et partageable. "
         "INTERDICTION : Ne commence JAMAIS par une phrase d'introduction."
     )
     
     try:
-        prompt = f"En tant qu'associé en charge du Business Développement UA, {consigne}. Données : {json.dumps(leads)}"
+        prompt = f"En tant qu'associé UA, {consigne}. Données : {json.dumps(leads)}"
         response = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
         return response.text.strip()
     except: return "Analyse indisponible."
