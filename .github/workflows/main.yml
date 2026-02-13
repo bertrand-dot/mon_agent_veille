@@ -1,13 +1,7 @@
 name: UA Radar National
 
 on:
-  schedule:
-    # 03:00 UTC = 04:00 à Copenhague.
-    # Ce créneau garantit une réception avant 08:00 malgré le temps de scan.
-    - cron: '0 3 * * 1-5'
-  workflow_dispatch: # Permet le lancement manuel pour tests
 
-jobs:
   run-radar:
     runs-on: ubuntu-latest
 
