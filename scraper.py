@@ -5,6 +5,7 @@ import logging
 import time
 import csv
 import fitz  # PyMuPDF
+import io
 from bs4 import BeautifulSoup
 from google import genai
 from datetime import datetime
@@ -29,7 +30,7 @@ if GEMINI_KEY:
     except Exception as e:
         logging.error(f"❌ Erreur Gemini : {e}")
 
-# --- 2. GESTION GÉOGRAPHIQUE & ROTATION ---
+# --- 2. GESTION GÉOGRAPHIQUE & CORRECTIF ENCODAGE ---
 
 def obtenir_secteur_du_jour():
     config_jours = {
@@ -44,17 +45,25 @@ def obtenir_secteur_du_jour():
 def charger_cibles(nom_fichier):
     cibles = []
     if os.path.exists(nom_fichier):
-        try:
-            with open(nom_fichier, mode='r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    nom = row.get('Nom de l\'Organisme') or row.get('nom')
-                    if nom: cibles.append(nom.strip())
-        except Exception as e:
-            logging.error(f"❌ Erreur CSV : {e}")
+        content = None
+        # Test successif des encodages pour gérer les exports Excel
+        for enc in ['utf-8-sig', 'latin-1', 'cp1252', 'utf-8']:
+            try:
+                with open(nom_fichier, mode='r', encoding=enc) as f:
+                    content = f.read()
+                logging.info(f"📖 Fichier {nom_fichier} lu avec succès (Encodage: {enc})")
+                break
+            except UnicodeDecodeError:
+                continue
+        
+        if content:
+            reader = csv.DictReader(io.StringIO(content))
+            for row in reader:
+                nom = row.get('Nom de l\'Organisme') or row.get('nom')
+                if nom: cibles.append(nom.strip())
     return cibles
 
-# --- 3. ANALYSE IA : STRUCTURE STRICTE ---
+# --- 3. ANALYSE IA : VOTRE STRUCTURE DE PROMPT CONSERVÉE ---
 
 def analyser_opportunite(item, texte):
     if not client: return None
@@ -94,7 +103,7 @@ def analyser_opportunite(item, texte):
        - Commercial standard (Hangars, Box de stockage, supermarchés "boîtes" sans mixité).
 
     --- PRÉCISIONS & SÉVÉRITÉ (FILTRES QUALITATIFS) ---
-    - ÉLIMINER si DATE DÉPASSÉE : Rejeter si la date limite est antérieure au {date_du_jour}.
+    - ÉLIMINER si DATE DÉPASSÉE : Rejeter si la date limite de réponse est antérieure au {date_du_jour}.
     - ÉLIMINER si ARCHITECTE DÉJÀ DÉSIGNÉ : Rejeter si un lauréat ou attributaire est nommé.
     - ÉLIMINER le BRUIT INDUSTRIEL : Rejeter les actualités économiques sans projet architectural défini.
     - ÉLIMINER RÉSEAUX SOCIAUX : Aucun lead issu d'Instagram ou Facebook. LinkedIn autorisé (posts < 6 mois).
@@ -108,7 +117,7 @@ def analyser_opportunite(item, texte):
       "score_interne": 0,
       "deadline": "Date ou N/A",
       "matching_dna": "Lien ADN",
-      "analyse_ua": "Analyse détaillée de l'enjeu architectural et urbain",
+      "analyse_ua": "Analyse détaillée de l'enjeu architectural et urbain (60-80 mots)",
       "action": "Action concrète et détaillée pour Bertrand"
     }}
     DATA : {item.get('title')} | {texte[:9000]}"""
@@ -118,9 +127,7 @@ def analyser_opportunite(item, texte):
         raw_text = response.text.replace('```json', '').replace('```', '').strip()
         data = json.loads(raw_text)
         
-        # Sécurité : Si l'IA renvoie une liste, on extrait le premier objet
-        if isinstance(data, list):
-            data = data[0] if len(data) > 0 else None
+        if isinstance(data, list): data = data[0] if len(data) > 0 else None
             
         if data:
             source_url = item.get('link', '').lower()
@@ -129,10 +136,10 @@ def analyser_opportunite(item, texte):
             
         return data
     except Exception as e:
-        logging.warning(f"⚠️ Erreur parsing IA : {e}")
+        logging.warning(f"⚠️ Erreur analyse : {e}")
         return None
 
-# --- 4. RECHERCHE WEB & LINKEDIN ---
+# --- 4. RECHERCHE CIBLÉE ---
 
 def chercher_serpapi(cible):
     resultats = []
@@ -148,7 +155,7 @@ def chercher_serpapi(cible):
         except: continue
     return resultats
 
-# --- 5. SYNTHÈSES STRATÉGIQUES ---
+# --- 5. SYNTHÈSES SANS INTRODUCTION ---
 
 def generer_synthese(leads, mode="executif"):
     if not leads: return "Veille active : aucun dossier qualifié ce jour selon nos critères de sévérité."
@@ -158,7 +165,7 @@ def generer_synthese(leads, mode="executif"):
         "INTERDICTION : Ne commence JAMAIS par 'Voici...' ou 'Voici le résumé...'. Entre direct dans le vif du sujet."
     ) if mode == "executif" else (
         "Analyse prospective (3-4 lignes). Expert et partageable. "
-        "INTERDICTION : Ne commence pas par une phrase d'introduction."
+        "INTERDICTION : Ne commence JAMAIS par une phrase d'introduction."
     )
     
     try:
@@ -167,7 +174,7 @@ def generer_synthese(leads, mode="executif"):
         return response.text.strip()
     except: return "Analyse indisponible."
 
-# --- 6. INTERFACE ET ARCHIVE ---
+# --- 6. INTERFACE & ARCHIVE ---
 
 def mettre_a_jour_archive(nouveaux_leads):
     archive = []
@@ -248,7 +255,7 @@ def envoyer_rapport(top_leads, archive_leads, res_exec, res_strat, secteur):
 def extraire_contenu(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        res = requests.get(url, timeout=12, headers=headers)
+        res = requests.get(url, timeout=15, headers=headers)
         if res.status_code != 200: return ""
         if 'application/pdf' in res.headers.get('Content-Type', '').lower() or url.lower().endswith('.pdf'):
             doc = fitz.open(stream=res.content, filetype="pdf")
