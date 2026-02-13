@@ -15,19 +15,36 @@ BREVO_KEY = os.environ.get("BREVO_API_KEY")
 SCRAPER_KEY = os.environ.get("SCRAPERAPI_KEY")
 
 client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+
+# Configuration des logs pour voir les détails dans GitHub Actions
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Vérification de sécurité pour la clé API
+if not SCRAPER_KEY:
+    logging.error("❌ La clé SCRAPERAPI_KEY est manquante dans les variables d'environnement.")
 
 # --- 2. FONCTIONS DE LECTURE ---
 
-def extraire_avec_suivi(url, type_source="Web"):
+def extraire_avec_suivi(url, source_type="Web"):
     """Extrait le contenu et mesure la performance."""
     start_time = time.time()
+    
+    # Vérification de la clé avant l'appel
+    if not SCRAPER_KEY:
+        return "", "Clé API manquante", 0
+    
     try:
-        # Utilisation de render=true et wait pour forcer ScraperAPI à travailler
+        # Paramètres ScraperAPI : rendu JS + attente pour les sites dynamiques
         wait_time = 5000 if "linkedin" in url.lower() else 3000
-        proxy_url = f"https://api.scraperapi.com/?api_key={SCRAPER_KEY}&url={url}&render=true&wait={wait_time}"
+        proxy_url = "https://api.scraperapi.com/"
+        params = {
+            'api_key': SCRAPER_KEY,
+            'url': url,
+            'render': 'true',
+            'wait': wait_time
+        }
         
-        res = requests.get(proxy_url, timeout=60)
+        res = requests.get(proxy_url, params=params, timeout=60)
         duration = round(time.time() - start_time, 2)
         
         if res.status_code != 200:
@@ -36,32 +53,30 @@ def extraire_avec_suivi(url, type_source="Web"):
         soup = BeautifulSoup(res.text, 'html.parser')
         
         if "linkedin.com" in url:
-            # Extraction spécifique LinkedIn
             posts = [p.get_text().strip() for p in soup.find_all(['p', 'span']) if len(p.get_text().strip()) > 100]
             texte = " | ".join(list(set(posts))[:5])
         else:
-            # Extraction Web
             for s in soup(['nav', 'footer', 'script', 'style', 'header', 'aside']): s.decompose()
             texte = soup.get_text(separator=' ')
             
-        status = f"Succès ({len(texte)} chars)" if len(texte) > 100 else "Page vide (JS non chargé)"
+        status = f"Succès ({len(texte)} chars)" if len(texte) > 150 else "Page vide ou trop courte"
         return texte[:18000], status, duration
+        
     except Exception as e:
-        return "", f"Erreur: {str(e)}", round(time.time() - start_time, 2)
+        return "", f"Exception: {str(e)}", round(time.time() - start_time, 2)
 
-# --- 3. ANALYSE IA (PROMPT ASSOCIÉ SENIOR) ---
+# --- 3. ANALYSE IA ---
 
 def qualifier_ia_ua(nom, titre, texte, source):
+    if not client: return None
     prompt = f"""RÔLE : Associé Senior URBAN AGENCY.
     MISSION : Qualifier ce signal pour {nom} (Source: {source}).
     CRITÈRES : Budget > 10M€ HT / Surfaces > 3000m²-5000m².
-    ADN : Iconique, Bois, Waterfront, Résilience.
     FORMAT JSON : {{'projet':'nom', 'score_interne':0, 'analyse_ua':'60 mots', 'action':'conseil'}}
     DATA : {titre} | {texte[:8000]}"""
     try:
         resp = client.models.generate_content(model="gemini-2.5-pro", contents=prompt)
-        data = json.loads(resp.text.replace('```json', '').replace('```', '').strip())
-        return data
+        return json.loads(resp.text.replace('```json', '').replace('```', '').strip())
     except: return None
 
 # --- 4. MAIN ---
@@ -69,9 +84,10 @@ def qualifier_ia_ua(nom, titre, texte, source):
 def main():
     leads = []
     logs_controle = []
-    logging.info("🚀 Démarrage du Test Lab (Double Rapport)")
+    logging.info("🚀 Démarrage du Test Lab (Version 2.0 - Correctif 401)")
 
     try:
+        # Encodage cp1252 pour lire votre CSV Windows sans erreur d'accents
         with open('Lab/test_cibles.csv', mode='r', encoding='cp1252') as f:
             reader = csv.DictReader(f)
             reader.fieldnames = [fn.strip() for fn in reader.fieldnames]
@@ -85,9 +101,8 @@ def main():
                 # A. SCAN WEB
                 if url_actu:
                     logging.info(f"🔎 Scanning Web : {nom}")
-                    # On commence par lire la liste pour trouver 1 lien
                     raw_html, status_index, dur_index = extraire_avec_suivi(url_actu)
-                    logs_controle.append({"organisme": nom, "type": "Index Web", "status": status_index, "duration": dur_index, "url": url_actu})
+                    logs_controle.append({"org": nom, "type": "Index Web", "status": status_index, "dur": dur_index, "url": url_actu})
                     
                     if "Succès" in status_index:
                         soup = BeautifulSoup(raw_html, 'html.parser')
@@ -99,7 +114,7 @@ def main():
                                 link = urljoin(url_actu, link)
                             
                             txt, status_art, dur_art = extraire_avec_suivi(link)
-                            logs_controle.append({"organisme": nom, "type": "Article Web", "status": status_art, "duration": dur_art, "url": link})
+                            logs_controle.append({"org": nom, "type": "Article Web", "status": status_art, "dur": dur_art, "url": link})
                             
                             if len(txt) > 400:
                                 ana = qualifier_ia_ua(nom, liens[0].text.strip(), txt, "Web")
@@ -111,7 +126,7 @@ def main():
                 if url_linkedin:
                     logging.info(f"🔎 Scanning LinkedIn : {nom}")
                     txt_li, status_li, dur_li = extraire_avec_suivi(url_linkedin)
-                    logs_controle.append({"organisme": nom, "type": "LinkedIn", "status": status_li, "duration": dur_li, "url": url_linkedin})
+                    logs_controle.append({"org": nom, "type": "LinkedIn", "status": status_li, "dur": dur_li, "url": url_linkedin})
                     
                     if len(txt_li) > 200:
                         ana = qualifier_ia_ua(nom, "Derniers Posts", txt_li, "LinkedIn")
@@ -120,24 +135,30 @@ def main():
                             leads.append(ana)
 
     except Exception as e:
-        logging.error(f"❌ Erreur CSV : {e}")
+        logging.error(f"❌ Erreur critique CSV : {e}")
 
-    # --- ENVOI DES RAPPORTS ---
+    # --- 5. ENVOI DES RAPPORTS ---
     
-    # 1. Mail Opportunités
-    if leads:
-        html_leads = "<h2>🎯 Opportunités Qualifiées (Score >= 2)</h2>"
-        for l in leads:
-            html_leads += f"<div style='background:#f9f9f9; padding:15px; border-left:5px solid #27ae60; margin-bottom:10px;'><b>{l['autorite']}</b> : {l['projet']}<br>{l.get('analyse_ua', '')}<br><a href='{l['url']}'>Lien ↗</a></div>"
-        requests.post("https://api.brevo.com/v3/smtp/email", headers={"api-key": BREVO_KEY}, json={"sender": {"name": "Lab UA", "email": "bertrand@urban-agency.com"}, "to": [{"email": "bertrand@urban-agency.com"}], "subject": "🧪 LAB : Opportunités", "htmlContent": html_leads})
-
-    # 2. Mail de Contrôle Technique (Systématique)
+    # Rapport Technique
     html_ctrl = "<h2>🛠️ Rapport de Contrôle Technique</h2><table border='1' style='border-collapse:collapse; width:100%; font-size:11px;'>"
     html_ctrl += "<tr style='background:#eee;'><th>Organisme</th><th>Type</th><th>Durée</th><th>Statut</th><th>URL</th></tr>"
     for log in logs_controle:
         color = "green" if "Succès" in log['status'] else "red"
-        html_ctrl += f"<tr><td>{log['organisme']}</td><td>{log['type']}</td><td>{log['duration']}s</td><td style='color:{color};'>{log['status']}</td><td><a href='{log['url']}'>Lien</a></td></tr>"
+        html_ctrl += f"<tr><td>{log['org']}</td><td>{log['type']}</td><td>{log['dur']}s</td><td style='color:{color};'>{log['status']}</td><td>{log['url']}</td></tr>"
     html_ctrl += "</table>"
-    requests.post("https://api.brevo.com/v3/smtp/email", headers={"api-key": BREVO_KEY}, json={"sender": {"name": "Lab UA", "email": "bertrand@urban-agency.com"}, "to": [{"email": "bertrand@urban-agency.com"}], "subject": "🛠️ LAB : Contrôle Technique", "htmlContent": html_ctrl})
+    
+    if BREVO_KEY:
+        requests.post("https://api.brevo.com/v3/smtp/email", headers={"api-key": BREVO_KEY}, 
+            json={"sender": {"name": "Lab UA", "email": "bertrand@urban-agency.com"}, "to": [{"email": "bertrand@urban-agency.com"}], 
+            "subject": "🛠️ LAB : Contrôle Technique", "htmlContent": html_ctrl})
+
+    # Rapport Opportunités
+    if leads and BREVO_KEY:
+        html_leads = "<h2>🎯 Opportunités Qualifiées</h2>"
+        for l in leads:
+            html_leads += f"<div style='background:#f9f9f9; padding:15px; border-left:5px solid #27ae60; margin-bottom:10px;'><b>{l['autorite']}</b> : {l['projet']}<br>{l.get('analyse_ua', '')}<br><a href='{l['url']}'>Lien ↗</a></div>"
+        requests.post("https://api.brevo.com/v3/smtp/email", headers={"api-key": BREVO_KEY}, 
+            json={"sender": {"name": "Lab UA", "email": "bertrand@urban-agency.com"}, "to": [{"email": "bertrand@urban-agency.com"}], 
+            "subject": "🧪 LAB : Opportunités", "htmlContent": html_leads})
 
 if __name__ == "__main__": main()
